@@ -1,24 +1,21 @@
 # BlakGhost Kernel
-This BlackGHost custom kernel (3.18.140) source made to DOOGEE X5 (MT6580).
+This BlackGHost custom kernel (3.18.140) source adapted to Bluboo Maya (MT6580).
+
+Original kernel sources by svoboda18 :)
 
 ## Known information:
 | Subsystem | Driver name | Availability | Working |
 |-----------|-------------|--------------|---------|
 | LCM driver | `hct_hx8394f_dsi_vdo_hd_cmi` | Yes | Yes |
-| LCM driver #2 | `hct_rm68200_dsi_vdo_hd_cpt` | Yes | Yes |
-| LCM driver #3 | `hct_otm1282_dsi_vdo_hd_auo` | Yes | Yes |
-| LCM driver #4 | `hct_ili9881_dsi_vdo_hd_cpt` | Yes | Yes |
-| LCM driver #5 | `hct_otm1285a_dsi_vdo_hd_boe` | Yes | Yes |
-| Touch panel | `FT5X05 (i2c 1-0038)` | Yes | Yes |
+| Touch panel | `FT5X0X (i2c 1-0038)` | Yes | Yes |
 | GPU | `Mali-400 MP2` | Yes | Yes |
-| Camera #1 | `s5k5e2y_mipi_raw` | Yes | Yes |
-| Camera #2 | `gc2355_mipi_raw` | Yes | Yes |
-| Accelerometer | `MXC400X (i2c 2-0015)` | Yes | Yes |
-| ALS/PS | `EPL2182 (i2c 2-0049)` | Yes | Yes |
-| Flash | `Samsung FNX2MB` | - | Yes |
+| Camera #1 | `hi843b_mipi_raw` | Yes | - |
+| Camera #2 | `gc5005_mipi_raw` | Yes | Yes |
+| Accelerometer | `MXC622X (i2c 2-0015)` | Yes | No |
+| Flash | `DS2016` | - | Yes |
 | Lens | `DW9714AF` | Yes | Yes |
-| RAM | `1 GB LPDDR3_1066` | - | Yes |
-| Sound | `mtsndcard` | Yes | Yes |
+| RAM | `2 GB LPDDR3_1066` | - | Yes |
+| Sound | `mtsndcard` | Yes | - |
 | Accdet | `mt6580-accdet` | - | Yes |
 | Other | `kd_camera_hw (i2c 0-0036)` | Yes | Yes |
 
@@ -53,7 +50,7 @@ This BlackGHost custom kernel (3.18.140) source made to DOOGEE X5 (MT6580).
 
 ## Build process:
 * Clone that repo, by running:
-`git clone https://github.com/svoboda18/android_blackghost_kernel kernel`
+`git clone https://github.com/ruben1863/android_blackghost_maya kernel`
 * Start the build:
 `cd kernel ; bash Build-BlackGhostKernel`
 * Then type `b` to **build** the kernel
