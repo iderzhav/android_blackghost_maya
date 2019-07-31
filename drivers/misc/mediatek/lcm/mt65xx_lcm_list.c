@@ -19,7 +19,7 @@
 #define LCD_DEBUG(fmt, args...)  pr_debug("[KERNEL/LCM]"fmt, ##args)
 #endif
 
-LCM_DRIVER *lcm_driver_list[] = {
+#if defined(S6D7AA0_DSI_VDO_COMMON)
 	&s6d7aa0_dsi_vdo_common_lcm_drv,
 #endif
 };
