@@ -1,27 +1,19 @@
-/******************** (C) COPYRIGHT 2016 MEMSIC ********************
+/* MXC622X motion sensor driver
  *
- * File Name          : mxc622x.c
- * Description        : MXC622X accelerometer sensor API
  *
- *******************************************************************************
  *
- * This program is free software; you can redistribute it and/or modify
- * it under the terms of the GNU General Public License version 2 as
- * published by the Free Software Foundation.
+ * This software is licensed under the terms of the GNU General Public
+ * License version 2, as published by the Free Software Foundation, and
+ * may be copied, distributed, and modified under those terms.
  *
- * THE PRESENT SOFTWARE IS PROVIDED ON AN "AS IS" BASIS, WITHOUT WARRANTIES
- * OR CONDITIONS OF ANY KIND, EITHER EXPRESS OR IMPLIED, FOR THE SOLE
- * PURPOSE TO SUPPORT YOUR APPLICATION DEVELOPMENT.
- * AS A RESULT, MEMSIC SHALL NOT BE HELD LIABLE FOR ANY DIRECT,
- * INDIRECT OR CONSEQUENTIAL DAMAGES WITH RESPECT TO ANY CLAIMS ARISING FROM THE
- * CONTENT OF SUCH SOFTWARE AND/OR THE USE MADE BY CUSTOMERS OF THE CODING
- * INFORMATION CONTAINED HEREIN IN CONNECTION WITH THEIR PRODUCTS.
+ * This program is distributed in the hope that it will be useful,
+ * but WITHOUT ANY WARRANTY; without even the implied warranty of
+ * MERCHANTABILITY or FITNESS FOR A PARTICULAR PURPOSE.  See the
+ * GNU General Public License for more details.
  *
- * THIS SOFTWARE IS SPECIFICALLY DESIGNED FOR EXCLUSIVE USE WITH MEMSIC PARTS.
- *
- ******************************************************************************/
-
-#include <linux/interrupt.h>
+ */
+	 
+//#include <linux/interrupt.h>
 #include <linux/i2c.h>
 #include <linux/slab.h>
 #include <linux/irq.h>
@@ -33,1818 +25,1679 @@
 #include <linux/kobject.h>
 #include <linux/platform_device.h>
 #include <asm/atomic.h>
-#include <linux/time.h>
-#include <linux/kernel.h>
-
-
+	 
 #include "accel.h"
 #include "cust_acc.h"
-#include "sensors_io.h"
 #include "mxc622x.h"
-
-
-#define I2C_DRIVERID_MXC622X		150
+	 /*----------------------------------------------------------------------------*/
+#define I2C_DRIVERID_MXC622X 150
+	 /*----------------------------------------------------------------------------*/
+#define DEBUG 1
+	 /*----------------------------------------------------------------------------*/
+	 //#define CONFIG_MXC622X_LOWPASS   /*apply low pass filter on output*/		 
 #define SW_CALIBRATION
-#define DRIVER_VERSION				"V60.97.05.01"
-#define GSE_DEBUG_ON          		0
-#define GSE_DEBUG_FUNC_ON     		0
-/* Log define */
-#define GSE_INFO(fmt, arg...)      	pr_warn("<<-GSE INFO->> "fmt"\n", ##arg)
-#define GSE_ERR(fmt, arg...)          	pr_err("<<-GSE ERROR->> "fmt"\n", ##arg)
-#define GSE_DEBUG(fmt, arg...)		do {\
-						if (GSE_DEBUG_ON)\
-							pr_warn("<<-GSE DEBUG->> [%d]"fmt"\n", __LINE__, ##arg);\
-					} while (0)
-#define GSE_DEBUG_FUNC()		do {\
-						if (GSE_DEBUG_FUNC_ON)\
-							pr_debug("<<-GSE FUNC->> Func:%s@Line:%d\n", __func__, __LINE__);\
-					} while (0)
+	 
+	 /*----------------------------------------------------------------------------*/
+#define MXC622X_AXIS_X          0
+#define MXC622X_AXIS_Y          1
+#define MXC622X_AXIS_Z          2
+#define MXC622X_AXES_NUM        2
+#define MXC622X_DATA_LEN        2
 
-#define MXC622X_AXIS_X          	0
-#define MXC622X_AXIS_Y          	1
-#define MXC622X_AXIS_Z          	2
-#define MXC622X_AXES_NUM        	3
-#define MXC622X_DATA_LEN        	6
-#define C_MAX_FIR_LENGTH 		(32)
-#define  USE_DELAY
-static s16 cali_sensor_data;
-#ifdef USE_DELAY
-static int delay_state = 0;
-#endif
-static const struct i2c_device_id mxc622x_i2c_id[] = { { MXC622X_DEV_NAME, 0 }, { }, };
-static int mxc622x_i2c_probe(struct i2c_client *client, const struct i2c_device_id *id);
+#define MXC622X_INIT_SUCC	(0)
+#define MXC622X_INIT_FAIL	(-1)
+
+#define MXC622X_DEV_NAME        "MXC622X"
+/*----------------------------------------------------------------------------*/
+
+/*----------------------------------------------------------------------------*/
+static const struct i2c_device_id mxc622x_i2c_id[] = {{MXC622X_DEV_NAME,0},{}};
+/*the adapter id will be available in customization*/
+//static struct i2c_board_info __initdata i2c_mxc622x={ I2C_BOARD_INFO("MXC622X", MXC622X_I2C_SLAVE_ADDR>>1)};
+
+/*----------------------------------------------------------------------------*/
+static int mxc622x_i2c_probe(struct i2c_client *client, const struct i2c_device_id *id); 
 static int mxc622x_i2c_remove(struct i2c_client *client);
-#ifndef CONFIG_HAS_EARLYSUSPEND
+//static int mxc622x_i2c_detect(struct i2c_client *client, int kind, struct i2c_board_info *info);
+static int mxc622x_local_init(void);
+static int mxc622x_remove(void);
+
 static int mxc622x_suspend(struct i2c_client *client, pm_message_t msg);
 static int mxc622x_resume(struct i2c_client *client);
-#endif
-static int  mxc622x_local_init(void);
-static int mxc622x_remove(void);
-typedef enum {
-	ADX_TRC_FILTER   = 0x01,
-	ADX_TRC_RAWDATA  = 0x02,
-	ADX_TRC_IOCTL	 = 0x04,
-	ADX_TRC_CALI	 = 0X08,
-	ADX_TRC_INFO	 = 0X10,
-} ADX_TRC;
 
-struct scale_factor{
-	u8  whole;
-	u8  fraction;
+//static int	s_nInitFlag = MXC622X_INIT_FAIL;
+//add by major  for 35 
+static struct acc_init_info  mxc622x_init_info =
+{
+	.name   = MXC622X_DEV_NAME,
+	.init   = mxc622x_local_init,
+	.uninit = mxc622x_remove,
 };
 
-struct data_resolution {
-	struct scale_factor scalefactor;
-	int    sensitivity;
-};
-
-
-struct data_filter {
-	s16 raw[C_MAX_FIR_LENGTH][MXC622X_AXES_NUM];
-	int sum[MXC622X_AXES_NUM];
-	int num;
-	int idx;
-};
-static int mxc622x_init_flag = -1;
-/*----------------------------------------------------------------------------*/
-static struct acc_init_info mxc622x_init_info = {
-		.name = "mxc622x",
-		.init = mxc622x_local_init,
-		.uninit = mxc622x_remove,
-};
-struct mxc622x_i2c_data {
-		 struct i2c_client *client;
-		 struct acc_hw hw;
-		 struct hwmsen_convert	 cvt;
-		 atomic_t layout;
-		 /*misc*/
-		 struct data_resolution *reso;
-		 atomic_t				 trace;
-		 atomic_t				 suspend;
-		 atomic_t				 selftest;
-		 atomic_t				 filter;
-		 s16					 cali_sw[MXC622X_AXES_NUM+1];
-
-		 /*data*/
-		 s8 					 offset[MXC622X_AXES_NUM+1];  /*+1: for 4-byte alignment*/
-		 s16					 data[MXC622X_AXES_NUM+1];
-#if defined(CONFIG_MXC622X_LOWPASS)
-		 atomic_t				 firlen;
-		 atomic_t				 fir_en;
-		 struct data_filter 	 fir;
-#endif
-		 /*early suspend*/
-#if defined(CONFIG_HAS_EARLYSUSPEND)
-		 struct early_suspend	 early_drv;
-#endif
-};
-
-#ifdef CONFIG_OF
 static const struct of_device_id accel_of_match[] = {
 	{.compatible = "mediatek,gsensor"},
 	{},
 };
-#endif
 
+
+/*----------------------------------------------------------------------------*/
+typedef enum {
+ ADX_TRC_FILTER  = 0x01,
+ ADX_TRC_RAWDATA = 0x02,
+ ADX_TRC_IOCTL	 = 0x04,
+ ADX_TRC_CALI	 = 0X08,
+ ADX_TRC_INFO	 = 0X10,
+} ADX_TRC;
+/*----------------------------------------------------------------------------*/
+struct scale_factor{
+ u8  whole;
+ u8  fraction;
+};
+/*----------------------------------------------------------------------------*/
+struct data_resolution {
+ struct scale_factor scalefactor;
+ int	sensitivity;
+};
+/*----------------------------------------------------------------------------*/
+#define C_MAX_FIR_LENGTH (32)
+/*----------------------------------------------------------------------------*/
+struct data_filter {
+ s16 raw[C_MAX_FIR_LENGTH][MXC622X_AXES_NUM];
+ int sum[MXC622X_AXES_NUM];
+ int num;
+ int idx;
+};
+/*----------------------------------------------------------------------------*/
+struct mxc622x_i2c_data {
+ struct i2c_client *client;
+ struct acc_hw hw;
+ struct hwmsen_convert	 cvt;
+ /*misc*/
+ struct data_resolution *reso;
+ atomic_t				 trace;
+ atomic_t				 suspend;
+ atomic_t				 selftest;
+ atomic_t				 filter;
+ s16					 cali_sw[MXC622X_AXES_NUM+1];
+
+ /*data*/
+ s8 					 offset[MXC622X_AXES_NUM+1];  /*+1: for 4-byte alignment*/
+ s16					 data[MXC622X_AXES_NUM+1];
+
+#if defined(CONFIG_MXC622X_LOWPASS)
+ atomic_t				 firlen;
+ atomic_t				 fir_en;
+ struct data_filter 	 fir;
+#endif 
+};
+/*----------------------------------------------------------------------------*/
 static struct i2c_driver mxc622x_i2c_driver = {
-	 .driver = {
-		// .owner		   = THIS_MODULE,
-		 .name			 = MXC622X_DEV_NAME,
-	   #ifdef CONFIG_OF
-		.of_match_table = accel_of_match,
-	   #endif
-	 },
-	 .probe 			 = mxc622x_i2c_probe,
-	 .remove			 = mxc622x_i2c_remove,
-	#if !defined(CONFIG_HAS_EARLYSUSPEND)
-	 .suspend			 = mxc622x_suspend,
-	 .resume			 = mxc622x_resume,
-	#endif
-	 .id_table = mxc622x_i2c_id,
+ .driver = {
+	 .name		 = MXC622X_DEV_NAME,
+	 .of_match_table = accel_of_match,
+ },
+ .probe 			 = mxc622x_i2c_probe,
+ .remove			 = mxc622x_i2c_remove,
+ .suspend			 = mxc622x_suspend,
+ .resume			 = mxc622x_resume,
+ .id_table = mxc622x_i2c_id,
 };
 
+/*----------------------------------------------------------------------------*/
+static struct i2c_client *mxc622x_i2c_client = NULL;
+static struct mxc622x_i2c_data *obj_i2c_data = NULL;
+static bool sensor_power = true;
+static GSENSOR_VECTOR3D gsensor_gain;
+//static char selftestRes[8]= {0}; 
+	 
+	 /*----------------------------------------------------------------------------*/
+#define GSE_TAG                  "[Gsensor] "
+#define GSE_FUN(f)               printk(GSE_TAG"%s\n", __FUNCTION__)
+#define GSE_ERR(fmt, args...)    printk(KERN_ERR GSE_TAG"%s %d : "fmt, __FUNCTION__, __LINE__, ##args)
+#define GSE_LOG(fmt, args...)    printk(GSE_TAG fmt, ##args)
 
-
-struct i2c_client      			*mxc622x_i2c_client = NULL;
-static struct mxc622x_i2c_data 		*obj_i2c_data = NULL;
-static bool sensor_power = false;
-static struct GSENSOR_VECTOR3D gsensor_gain;
-static struct mutex mxc622x_mutex;
-static bool enable_status = false;
-
-static struct data_resolution mxc622x_data_resolution[] = {
-    {{ 0, 9}, 1024},   /*+/-2g  in 12-bit resolution:  0.9 mg/LSB*/
-    {{ 1, 9}, 512},   /*+/-4g  in 12-bit resolution:  1.9 mg/LSB*/
-    {{ 3, 9},  256},   /*+/-8g  in 12-bit resolution: 3.9 mg/LSB*/
+/*----------------------------------------------------------------------------*/
+static struct data_resolution mxc622x_data_resolution[1] = {
+/* combination by {FULL_RES,RANGE}*/
+ {{ 15, 6}, 64},   // dataformat +/-2g	in 8-bit resolution;  { 15, 6} = 15.6 = (2*2*1000)/(2^8);  64 = (2^8)/(2*2)		   
 };
-static struct data_resolution mxc622x_offset_resolution = {{3, 9}, 256};
+/*----------------------------------------------------------------------------*/
+static struct data_resolution mxc622x_offset_resolution = {{15, 6}, 64};
+	 
 
+static struct mutex g_gsensor_mutex;
+//#define BMA222_I2C_GPIO_MODE
+//#define BMA222_I2C_GPIO_MODE_DEBUG
+
+#define MXC622X_ABS(a) (((a) < 0) ? -(a) : (a))
+
+static int mxc622x_sqrt(int high, int low, int value)
+{
+	int med;
+	int high_diff = 0;
+	int low_diff = 0;
+	
+	if (value <= 0)
+		return 0;
+
+	high_diff = MXC622X_ABS(high * high - value);
+	low_diff = MXC622X_ABS(low * low - value);
+	
+	while (MXC622X_ABS(high - low) > 1)
+	{
+		med = (high + low ) / 2;
+		if (med * med > value)
+		{
+			high = med;
+			high_diff = high * high - value;
+		}
+		else
+		{
+			low = med;
+			low_diff = value - low * low;
+		}
+	}
+
+	return high_diff <= low_diff ? high : low;
+}
+
+//add by major 
+#define C_I2C_FIFO_SIZE     8
 static int mxc622x_i2c_read_block(struct i2c_client *client, u8 addr, u8 *data, u8 len)
 {
 	u8 beg = addr;
-	struct i2c_msg msgs[2] = {
-		{
-			.addr = client->addr,	.flags = 0,
-			.len = 1,	.buf = &beg
-		},
-		{
-			.addr = client->addr,	.flags = I2C_M_RD,
-			.len = len,	.buf = data,
-		}
-	};
 	int err;
+	struct i2c_msg msgs[2]={{0},{0}};
+	
+//	mutex_lock(&MC3XXX_i2c_mutex);
+
+	msgs[0].addr = client->addr;
+	msgs[0].flags = 0;
+	msgs[0].len =1;
+	msgs[0].buf = &beg;
+	
+	msgs[1].addr = client->addr;
+	msgs[1].flags = I2C_M_RD;
+	msgs[1].len =len;
+	msgs[1].buf = data;
+
 
 	if (!client)
-		return -EINVAL;
-	else if (len > C_I2C_FIFO_SIZE) {
-		GSE_ERR(" length %d exceeds %d\n", len, C_I2C_FIFO_SIZE);
+	{
+//		mutex_unlock(&MC3XXX_i2c_mutex);
 		return -EINVAL;
 	}
-
+	else if (len > C_I2C_FIFO_SIZE)
+	{
+		GSE_ERR(" length %d exceeds %d\n", len, C_I2C_FIFO_SIZE);
+//		mutex_unlock(&MC3XXX_i2c_mutex);
+		return -EINVAL;
+	}
 	err = i2c_transfer(client->adapter, msgs, sizeof(msgs)/sizeof(msgs[0]));
-	if (err != 2) {
-		GSE_ERR("i2c_transfer error: (%d %p %d) %d\n",
-				addr, data, len, err);
+	if (err != 2)
+	{
+		GSE_ERR("i2c_transfer error: (%d %p %d) %d\n",addr, data, len, err);
 		err = -EIO;
-	} else {
+	}
+	else
+	{
 		err = 0;
 	}
-	return err;
-
-}
-
-static int MXC622X_SaveData(int buf[MXC622X_AXES_NUM])
-{
-
-	mutex_lock(&mxc622x_mutex);
-//	cali_sensor_data = buf[2];
-
-	mutex_unlock(&mxc622x_mutex);
-
-    return 0;
-}
-
-static int MXC622X_ReadTemp(struct i2c_client *client, s8 *data)
-{
-	u8 addr = MXC622X_REG_TEMP;
-	int err = 0;
-	s8 temp = 0;
-
-	if(NULL == client)
-	{
-		GSE_ERR("client is null\n");
-		err = -EINVAL;
-	}
-	if((err = mxc622x_i2c_read_block(client, addr, &temp, 1)))
-	{
-		GSE_ERR("error: %d\n", err);
-	}
-	*data = temp;
-
+//	mutex_unlock(&MC3XXX_i2c_mutex);
 	return err;
 }
-static int MXC622X_ReadDant(struct i2c_client *client, int dant[MXC622X_AXES_NUM])
-{
-	u8 addr = MXC622X_REG_X;
-	u8 buf[MXC622X_DATA_LEN+1] = {0};
-	int err = 0;
-
-	if(NULL == client)
+static int mxc622x_i2c_write_block(struct i2c_client *client, u8 addr, u8 *data, u8 len)
+{   /*because address also occupies one byte, the maximum length for write is 7 bytes*/
+	int err, idx, num;
+	char buf[C_I2C_FIFO_SIZE];
+	err =0;
+//	mutex_lock(&MC3XXX_i2c_mutex);
+	
+	if (!client)
 	{
-        	GSE_ERR("client is null\n");
-		err = -EINVAL;
+//		mutex_unlock(&MC3XXX_i2c_mutex);
+		return -EINVAL;
 	}
-	if((err = mxc622x_i2c_read_block(client, addr, buf, MXC622X_DATA_LEN+1)))
+	else if (len >= C_I2C_FIFO_SIZE)
 	{
-		GSE_ERR("error: %d\n", err);
-	}
-	else
-    	{
-
-		dant[MXC622X_AXIS_X] = (s16)((s16)buf[0] << 8 | (s16)buf[1]) >> 4;
-		dant[MXC622X_AXIS_Y] = (s16)((s16)buf[2] << 8 | (s16)buf[3]) >> 4;
-		dant[MXC622X_AXIS_Z] = (s16)((s16)buf[4] << 8 | (s16)buf[5]) >> 4;
-//		dant[MXC622X_AXIS_Z+1] = (s16)buf[6];
+		GSE_ERR(" length %d exceeds %d\n", len, C_I2C_FIFO_SIZE);
+//		mutex_unlock(&MC3XXX_i2c_mutex);
+		return -EINVAL;
 	}
 
-	return err;
-}
-static int MXC622X_SetDataResolution(struct mxc622x_i2c_data *obj)
-{
- 	obj->reso = &mxc622x_data_resolution[2];
-	return MXC622X_SUCCESS;
-}
-static int MXC622X_ReadData(struct i2c_client *client, s16 data[MXC622X_AXES_NUM])
-{
-#ifdef CONFIG_MXC622X_LOWPASS
-	mxc622x_i2c_data *priv = i2c_get_clientdata(client);
-#endif
-	u8 addr = MXC622X_REG_X;
-	u8 buf[MXC622X_DATA_LEN] = {0};
-	int err = 0;
-
-#ifdef USE_DELAY
-	if(delay_state){
-		msleep(150);
-		delay_state = 0;
-	}
-#endif
-
-	if(NULL == client)
+	num = 0;
+	buf[num++] = addr;
+	for (idx = 0; idx < len; idx++)
 	{
-        	GSE_ERR("client is null\n");
-		err = -EINVAL;
+		buf[num++] = data[idx];
 	}
-	if((err = mxc622x_i2c_read_block(client, addr, buf, MXC622X_DATA_LEN))!=0)
+	err = i2c_master_send(client, buf, num);
+	if (err < 0)
 	{
-		GSE_ERR("error: %d\n", err);
+		GSE_ERR("send command error!!\n");
+//		mutex_unlock(&MC3XXX_i2c_mutex);
+		return -EFAULT;
 	}
 	else
 	{
-		data[MXC622X_AXIS_X] = (s16)(buf[0] << 8 | buf[1]) >> 4;
-		data[MXC622X_AXIS_Y] = (s16)(buf[2] << 8 | buf[3]) >> 4;
-		data[MXC622X_AXIS_Z] = (s16)(buf[4] << 8 | buf[5]) >> 4;
-		GSE_DEBUG("reg data x = %d %d y = %d %d z = %d %d\n", buf[0], buf[1], buf[2], buf[3], buf[4], buf[5]);
-
-#ifdef CONFIG_MXC622X_LOWPASS
-		if(atomic_read(&priv->filter))
-		{
-			if(atomic_read(&priv->fir_en) && !atomic_read(&priv->suspend))
-			{
-				int idx, firlen = atomic_read(&priv->firlen);
-				if(priv->fir.num < firlen)
-				{
-					priv->fir.raw[priv->fir.num][MXC622X_AXIS_X] = data[MXC622X_AXIS_X];
-					priv->fir.raw[priv->fir.num][MXC622X_AXIS_Y] = data[MXC622X_AXIS_Y];
-					priv->fir.raw[priv->fir.num][MXC622X_AXIS_Z] = data[MXC622X_AXIS_Z];
-					priv->fir.sum[MXC622X_AXIS_X] += data[MXC622X_AXIS_X];
-					priv->fir.sum[MXC622X_AXIS_Y] += data[MXC622X_AXIS_Y];
-					priv->fir.sum[MXC622X_AXIS_Z] += data[MXC622X_AXIS_Z];
-					if(atomic_read(&priv->trace) & ADX_TRC_FILTER)
-					{
-						GSE_DEBUG("add [%2d] [%5d %5d %5d] => [%5d %5d %5d]\n", priv->fir.num,
-							priv->fir.raw[priv->fir.num][MXC622X_AXIS_X], priv->fir.raw[priv->fir.num][MXC622X_AXIS_Y], priv->fir.raw[priv->fir.num][MXC622X_AXIS_Z],
-							priv->fir.sum[MXC622X_AXIS_X], priv->fir.sum[MXC622X_AXIS_Y], priv->fir.sum[MXC622X_AXIS_Z]);
-					}
-					priv->fir.num++;
-					priv->fir.idx++;
-				}
-				else
-				{
-					idx = priv->fir.idx % firlen;
-					priv->fir.sum[MXC622X_AXIS_X] -= priv->fir.raw[idx][MXC622X_AXIS_X];
-					priv->fir.sum[MXC622X_AXIS_Y] -= priv->fir.raw[idx][MXC622X_AXIS_Y];
-					priv->fir.sum[MXC622X_AXIS_Z] -= priv->fir.raw[idx][MXC622X_AXIS_Z];
-					priv->fir.raw[idx][MXC622X_AXIS_X] = data[MXC622X_AXIS_X];
-					priv->fir.raw[idx][MXC622X_AXIS_Y] = data[MXC622X_AXIS_Y];
-					priv->fir.raw[idx][MXC622X_AXIS_Z] = data[MXC622X_AXIS_Z];
-					priv->fir.sum[MXC622X_AXIS_X] += data[MXC622X_AXIS_X];
-					priv->fir.sum[MXC622X_AXIS_Y] += data[MXC622X_AXIS_Y];
-					priv->fir.sum[MXC622X_AXIS_Z] += data[MXC622X_AXIS_Z];
-					priv->fir.idx++;
-					data[MXC622X_AXIS_X] = priv->fir.sum[MXC622X_AXIS_X]/firlen;
-					data[MXC622X_AXIS_Y] = priv->fir.sum[MXC622X_AXIS_Y]/firlen;
-					data[MXC622X_AXIS_Z] = priv->fir.sum[MXC622X_AXIS_Z]/firlen;
-					if(atomic_read(&priv->trace) & ADX_TRC_FILTER)
-					{
-						GSE_DEBUG("add [%2d] [%5d %5d %5d] => [%5d %5d %5d] : [%5d %5d %5d]\n", idx,
-						priv->fir.raw[idx][MXC622X_AXIS_X], priv->fir.raw[idx][MXC622X_AXIS_Y], priv->fir.raw[idx][MXC622X_AXIS_Z],
-						priv->fir.sum[MXC622X_AXIS_X], priv->fir.sum[MXC622X_AXIS_Y], priv->fir.sum[MXC622X_AXIS_Z],
-						data[MXC622X_AXIS_X], data[MXC622X_AXIS_Y], data[MXC622X_AXIS_Z]);
-					}
-				}
-			}
-		}
-#endif
+		err = 0;
 	}
+//	mutex_unlock(&MC3XXX_i2c_mutex);
 	return err;
+
+}	//add end
+
+int cust_i2c_master_send(struct i2c_client *client, u8 *buf, u8 count)
+{
+	u8 slave_addr;
+	u8 reg_addr;
+
+	mutex_lock(&g_gsensor_mutex);
+	
+	slave_addr = MXC622X_I2C_SLAVE_ADDR ;	
+	reg_addr = buf[0];
+
+	mxc622x_i2c_write_block(client,reg_addr,&buf[1],count-1);
+
+	mutex_unlock(&g_gsensor_mutex);
+
+	return count;
+}
+
+int cust_i2c_master_read(struct i2c_client *client, u8 *buf, u8 count)
+{
+	u8 slave_addr;
+	u8 reg_addr;
+
+	slave_addr = MXC622X_I2C_SLAVE_ADDR ;	
+	reg_addr = buf[0];
+	mxc622x_i2c_read_block(client,reg_addr,&buf[0],count);
+
+	return count;
 }
 
 
-static int MXC622X_ReadOffset(struct i2c_client *client, s8 ofs[MXC622X_AXES_NUM])
+
+int cust_hwmsen_read_block(struct i2c_client *client, u8 addr, u8 *data, u8 len)
 {
-	int err;
-	err = 0;
-#ifdef SW_CALIBRATION
-	ofs[0]=ofs[1]=ofs[2]=0x0;
-#endif
-	return err;
-}
+	u8 buf[64] = {0};
+	mutex_lock(&g_gsensor_mutex);
+	buf[0] = addr;
+	cust_i2c_master_read(client, buf, len);
+	mutex_unlock(&g_gsensor_mutex);
 
-static int MXC622X_ResetCalibration(struct i2c_client *client)
-{
-	struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
-	int err;
-	err = 0;
-
-	memset(obj->cali_sw, 0x00, sizeof(obj->cali_sw));
-	memset(obj->offset, 0x00, sizeof(obj->offset));
-	return err;
-}
-
-static int MXC622X_ReadCalibration(struct i2c_client *client, int dat[MXC622X_AXES_NUM])
-{
-	struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
-	int  err = 0;
-	int mul;
-
-#ifdef SW_CALIBRATION
-	mul = 0;//only SW Calibration, disable HW Calibration
-#else
-	if ((err = MXC622X_ReadOffset(client, obj->offset))) {
-		GSE_ERR("read offset fail, %d\n", err);
-		return err;
-	}
-	mul = obj->reso->sensitivity/mxc622x_offset_resolution.sensitivity;
-#endif
-
-	dat[obj->cvt.map[MXC622X_AXIS_X]] = obj->cvt.sign[MXC622X_AXIS_X]*(obj->offset[MXC622X_AXIS_X]*mul + obj->cali_sw[MXC622X_AXIS_X]);
-	dat[obj->cvt.map[MXC622X_AXIS_Y]] = obj->cvt.sign[MXC622X_AXIS_Y]*(obj->offset[MXC622X_AXIS_Y]*mul + obj->cali_sw[MXC622X_AXIS_Y]);
-	dat[obj->cvt.map[MXC622X_AXIS_Z]] = obj->cvt.sign[MXC622X_AXIS_Z]*(obj->offset[MXC622X_AXIS_Z]*mul + obj->cali_sw[MXC622X_AXIS_Z]);
-
-	return err;
-}
-static int MXC622X_ReadCalibrationEx(struct i2c_client *client, int act[MXC622X_AXES_NUM], int raw[MXC622X_AXES_NUM])
-{
-	/*raw: the raw calibration data; act: the actual calibration data*/
-	struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
-	int err;
-	int mul;
-	err = 0;
-
-
-#ifdef SW_CALIBRATION
-	mul = 0;//only SW Calibration, disable HW Calibration
-#else
-	if((err = MXC622X_ReadOffset(client, obj->offset)))
-	{
-		GSE_ERR("read offset fail, %d\n", err);
-		return err;
-	}
-	mul = obj->reso->sensitivity/mxc622x_offset_resolution.sensitivity;
-#endif
-
-	raw[MXC622X_AXIS_X] = obj->offset[MXC622X_AXIS_X]*mul + obj->cali_sw[MXC622X_AXIS_X];
-	raw[MXC622X_AXIS_Y] = obj->offset[MXC622X_AXIS_Y]*mul + obj->cali_sw[MXC622X_AXIS_Y];
-	raw[MXC622X_AXIS_Z] = obj->offset[MXC622X_AXIS_Z]*mul + obj->cali_sw[MXC622X_AXIS_Z];
-
-	act[obj->cvt.map[MXC622X_AXIS_X]] = obj->cvt.sign[MXC622X_AXIS_X]*raw[MXC622X_AXIS_X];
-	act[obj->cvt.map[MXC622X_AXIS_Y]] = obj->cvt.sign[MXC622X_AXIS_Y]*raw[MXC622X_AXIS_Y];
-	act[obj->cvt.map[MXC622X_AXIS_Z]] = obj->cvt.sign[MXC622X_AXIS_Z]*raw[MXC622X_AXIS_Z];
-
+	memcpy(data, buf, len);
 	return 0;
 }
+
+
+/*----------------------------------------------------------------------------*/
+
+/*----------------------------------------------------------------------------*/
+static int MXC622X_SetDataResolution(struct mxc622x_i2c_data *obj)
+{
+// int err;
+// u8  dat, reso;
+
+/*set g sensor dataresolution here*/
+
+/*MXC622X only can set to 8-bit dataresolution, so do nothing in mxc622x driver here*/
+
+/*end of set dataresolution*/
+
+
+
+/*we set measure range from -2g to +2g in MXC622X_SetDataFormat(client, MXC622X_RANGE_2G), 
+												 and set 10-bit dataresolution MXC622X_SetDataResolution()*/
+												 
+/*so mxc622x_data_resolution[0] set value as {{ 15, 6},64} when declaration, and assign the value to obj->reso here*/  
+
+ obj->reso = &mxc622x_data_resolution[0];
+ return 0;
+ 
+/*if you changed the measure range, for example call: MXC622X_SetDataFormat(client, MXC622X_RANGE_4G), 
+you must set the right value to mxc622x_data_resolution*/
+
+}
+/*----------------------------------------------------------------------------*/
+static int MXC622X_ReadData(struct i2c_client *client, s16 data[MXC622X_AXES_NUM])
+{
+ struct mxc622x_i2c_data *priv = i2c_get_clientdata(client); 	   
+ u8 addr = MXC622X_REG_DATAX0;
+ u8 buf[MXC622X_DATA_LEN] = {0};
+ int err = 0;
+// int i;
+// int tmp=0;
+// u8 ofs[3];
+
+
+
+ if(NULL == client)
+ {
+	 err = -EINVAL;
+ }
+ err = cust_hwmsen_read_block(client, addr, buf, 2);
+ if(err)
+ {
+	 //printk("gsensor 11111\n");
+	 GSE_ERR("error: %d\n", err);
+ }
+ else
+ {
+	 //printk("gsensor 222222\n");
+	 data[MXC622X_AXIS_X] = (s16)buf[0];
+	 data[MXC622X_AXIS_Y] = (s16)buf[1];
+
+	if(data[MXC622X_AXIS_X]&0x80)
+	 {
+			 data[MXC622X_AXIS_X] = ~data[MXC622X_AXIS_X];
+			 data[MXC622X_AXIS_X] &= 0xff;
+			 data[MXC622X_AXIS_X]+=1;
+			 data[MXC622X_AXIS_X] = -data[MXC622X_AXIS_X];
+	 }
+	 if(data[MXC622X_AXIS_Y]&0x80)
+	 {
+			 data[MXC622X_AXIS_Y] = ~data[MXC622X_AXIS_Y];
+			 data[MXC622X_AXIS_Y] &= 0xff;
+			 data[MXC622X_AXIS_Y]+=1;
+			 data[MXC622X_AXIS_Y] = -data[MXC622X_AXIS_Y];
+	 }
+
+
+	 if(atomic_read(&priv->trace) & ADX_TRC_RAWDATA)
+	 {
+		 GSE_LOG("[%08X %08X] => [%5d %5d]\n", data[MXC622X_AXIS_X], data[MXC622X_AXIS_Y],
+									data[MXC622X_AXIS_X], data[MXC622X_AXIS_Y]);
+	 }
+#ifdef CONFIG_MXC622X_LOWPASS
+	 if(atomic_read(&priv->filter))
+	 {
+		 if(atomic_read(&priv->fir_en) && !atomic_read(&priv->suspend))
+		 {
+			 int idx, firlen = atomic_read(&priv->firlen);	 
+			 if(priv->fir.num < firlen)
+			 {				  
+				 priv->fir.raw[priv->fir.num][MXC622X_AXIS_X] = data[MXC622X_AXIS_X];
+				 priv->fir.raw[priv->fir.num][MXC622X_AXIS_Y] = data[MXC622X_AXIS_Y];
+
+				 priv->fir.sum[MXC622X_AXIS_X] += data[MXC622X_AXIS_X];
+				 priv->fir.sum[MXC622X_AXIS_Y] += data[MXC622X_AXIS_Y];
+
+				 if(atomic_read(&priv->trace) & ADX_TRC_FILTER)
+				 {
+					 GSE_LOG("add [%2d] [%5d %5d] => [%5d %5d]\n", priv->fir.num,
+						 priv->fir.raw[priv->fir.num][MXC622X_AXIS_X], priv->fir.raw[priv->fir.num][MXC622X_AXIS_Y],
+						 priv->fir.sum[MXC622X_AXIS_X], priv->fir.sum[MXC622X_AXIS_Y]);
+				 }
+				 priv->fir.num++;
+				 priv->fir.idx++;
+			 }
+			 else
+			 {
+				 idx = priv->fir.idx % firlen;
+				 priv->fir.sum[MXC622X_AXIS_X] -= priv->fir.raw[idx][MXC622X_AXIS_X];
+				 priv->fir.sum[MXC622X_AXIS_Y] -= priv->fir.raw[idx][MXC622X_AXIS_Y];
+
+				 priv->fir.raw[idx][MXC622X_AXIS_X] = data[MXC622X_AXIS_X];
+				 priv->fir.raw[idx][MXC622X_AXIS_Y] = data[MXC622X_AXIS_Y];
+
+				 priv->fir.sum[MXC622X_AXIS_X] += data[MXC622X_AXIS_X];
+				 priv->fir.sum[MXC622X_AXIS_Y] += data[MXC622X_AXIS_Y];
+
+				 priv->fir.idx++;
+				 data[MXC622X_AXIS_X] = priv->fir.sum[MXC622X_AXIS_X]/firlen;
+				 data[MXC622X_AXIS_Y] = priv->fir.sum[MXC622X_AXIS_Y]/firlen;
+
+				 if(atomic_read(&priv->trace) & ADX_TRC_FILTER)
+				 {
+					 GSE_LOG("add [%2d] [%5d %5d] => [%5d %5d] : [%5d %5d]\n", idx,
+					 priv->fir.raw[idx][MXC622X_AXIS_X], priv->fir.raw[idx][MXC622X_AXIS_Y],
+					 priv->fir.sum[MXC622X_AXIS_X], priv->fir.sum[MXC622X_AXIS_Y],
+					 data[MXC622X_AXIS_X], data[MXC622X_AXIS_Y]);
+				 }
+			 }
+		 }
+	 }	 
+#endif         
+ }
+ return err;
+}
+/*----------------------------------------------------------------------------*/
+static int MXC622X_ReadOffset(struct i2c_client *client, s8 ofs[MXC622X_AXES_NUM])
+{	  
+ int err=0;
+#ifdef SW_CALIBRATION
+ ofs[0]=ofs[1]=ofs[2]=0x0;
+#else
+/*
+ if(err = hwmsen_read_block(client, MXC622X_REG_OFSX, ofs, MXC622X_AXES_NUM))
+ {
+	 GSE_ERR("error: %d\n", err);
+ }
+*/
+#endif
+ //printk("offesx=%x, y=%x, z=%x",ofs[0],ofs[1],ofs[2]);
+ 
+ return err;	
+}
+/*----------------------------------------------------------------------------*/
+static int MXC622X_ResetCalibration(struct i2c_client *client)
+{
+ struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
+// u8 ofs[4]={0,0,0,0};
+ int err=0;
+ 
+#ifdef SW_CALIBRATION
+	 
+#else
+/*
+	 if(err = hwmsen_write_block(client, MXC622X_REG_OFSX, ofs, 4))
+	 {
+		 GSE_ERR("error: %d\n", err);
+	 }
+*/
+#endif
+
+ memset(obj->cali_sw, 0x00, sizeof(obj->cali_sw));
+ memset(obj->offset, 0x00, sizeof(obj->offset));
+ return err;	
+}
+/*----------------------------------------------------------------------------*/
+static int MXC622X_ReadCalibration(struct i2c_client *client, int dat[MXC622X_AXES_NUM])
+{
+ struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
+// int err=0;
+ int mul;
+
+#ifdef SW_CALIBRATION
+	 mul = 0;//only SW Calibration, disable HW Calibration
+#else
+
+	 if ((err = MXC622X_ReadOffset(client, obj->offset))) {
+	 GSE_ERR("read offset fail, %d\n", err);
+	 return err;
+	 }	  
+	 mul = obj->reso->sensitivity/mxc622x_offset_resolution.sensitivity;
+
+#endif
+
+ dat[obj->cvt.map[MXC622X_AXIS_X]] = obj->cvt.sign[MXC622X_AXIS_X]*(obj->offset[MXC622X_AXIS_X]*mul*GRAVITY_EARTH_1000/(obj->reso->sensitivity) + obj->cali_sw[MXC622X_AXIS_X]);
+ dat[obj->cvt.map[MXC622X_AXIS_Y]] = obj->cvt.sign[MXC622X_AXIS_Y]*(obj->offset[MXC622X_AXIS_Y]*mul*GRAVITY_EARTH_1000/(obj->reso->sensitivity) + obj->cali_sw[MXC622X_AXIS_Y]);
+					
+									
+ return 0;
+}
+/*----------------------------------------------------------------------------*/
+static int MXC622X_ReadCalibrationEx(struct i2c_client *client, int act[MXC622X_AXES_NUM], int raw[MXC622X_AXES_NUM])
+{	
+ /*raw: the raw calibration data; act: the actual calibration data*/
+ struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
+// int err;
+ int mul;
+
+
+
+#ifdef SW_CALIBRATION
+	 mul = 0;//only SW Calibration, disable HW Calibration
+#else
+	 if(err = MXC622X_ReadOffset(client, obj->offset))
+	 {
+		 GSE_ERR("read offset fail, %d\n", err);
+		 return err;
+	 }	 
+	 mul = obj->reso->sensitivity/mxc622x_offset_resolution.sensitivity;
+#endif
+ 
+ raw[MXC622X_AXIS_X] = obj->offset[MXC622X_AXIS_X]*mul*GRAVITY_EARTH_1000/(obj->reso->sensitivity) + obj->cali_sw[MXC622X_AXIS_X];
+ raw[MXC622X_AXIS_Y] = obj->offset[MXC622X_AXIS_Y]*mul*GRAVITY_EARTH_1000/(obj->reso->sensitivity) + obj->cali_sw[MXC622X_AXIS_Y];
+
+
+ act[obj->cvt.map[MXC622X_AXIS_X]] = obj->cvt.sign[MXC622X_AXIS_X]*raw[MXC622X_AXIS_X];
+ act[obj->cvt.map[MXC622X_AXIS_Y]] = obj->cvt.sign[MXC622X_AXIS_Y]*raw[MXC622X_AXIS_Y];
+			
+						
+ return 0;
+}
+/*----------------------------------------------------------------------------*/
 static int MXC622X_WriteCalibration(struct i2c_client *client, int dat[MXC622X_AXES_NUM])
 {
-	struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
-	int err = 0;
-	int cali[MXC622X_AXES_NUM];
+ struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
+ int err;
+ int cali[MXC622X_AXES_NUM], raw[MXC622X_AXES_NUM];
+// int lsb = mxc622x_offset_resolution.sensitivity;
+// int divisor = obj->reso->sensitivity/lsb;
+ err = MXC622X_ReadCalibrationEx(client, cali, raw);
+ if(err)	 /*offset will be updated in obj->offset*/
+ { 
+	 GSE_ERR("read offset fail, %d\n", err);
+	 return err;
+ }
+
+ GSE_LOG("OLDOFF: (%+3d %+3d): (%+3d %+3d) / (%+3d %+3d)\n", 
+	 raw[MXC622X_AXIS_X], raw[MXC622X_AXIS_Y],
+	 obj->offset[MXC622X_AXIS_X], obj->offset[MXC622X_AXIS_Y],
+	 obj->cali_sw[MXC622X_AXIS_X], obj->cali_sw[MXC622X_AXIS_Y]);
+
+ /*calculate the real offset expected by caller*/
+ #if 0
+ cali[MXC622X_AXIS_X] = cali[MXC622X_AXIS_X] * GRAVITY_EARTH_1000 / obj->reso->sensitivity;
+ cali[MXC622X_AXIS_Y] = cali[MXC622X_AXIS_Y] * GRAVITY_EARTH_1000 / obj->reso->sensitivity;		  
+
+ #endif
+ cali[MXC622X_AXIS_X] += dat[MXC622X_AXIS_X];
+ cali[MXC622X_AXIS_Y] += dat[MXC622X_AXIS_Y];
+
+
+ GSE_LOG("UPDATE: (%+3d %+3d)\n", 
+	 dat[MXC622X_AXIS_X], dat[MXC622X_AXIS_Y]);
+
 #ifdef SW_CALIBRATION
+ obj->cali_sw[MXC622X_AXIS_X] = obj->cvt.sign[MXC622X_AXIS_X]*(cali[obj->cvt.map[MXC622X_AXIS_X]]);
+ obj->cali_sw[MXC622X_AXIS_Y] = obj->cvt.sign[MXC622X_AXIS_Y]*(cali[obj->cvt.map[MXC622X_AXIS_Y]]);
+
 #else
-	int lsb;
-	lsb = mxc622x_offset_resolution.sensitivity;
-	int divisor = obj->reso->sensitivity/lsb;
+#if 0
+ obj->offset[MXC622X_AXIS_X] = (s8)(obj->cvt.sign[MXC622X_AXIS_X]*(cali[obj->cvt.map[MXC622X_AXIS_X]])/(divisor));
+ obj->offset[MXC622X_AXIS_Y] = (s8)(obj->cvt.sign[MXC622X_AXIS_Y]*(cali[obj->cvt.map[MXC622X_AXIS_Y]])/(divisor));
+ obj->offset[MXC622X_AXIS_Z] = (s8)(obj->cvt.sign[MXC622X_AXIS_Z]*(cali[obj->cvt.map[MXC622X_AXIS_Z]])/(divisor));
+
+ /*convert software calibration using standard calibration*/
+ obj->cali_sw[MXC622X_AXIS_X] = obj->cvt.sign[MXC622X_AXIS_X]*(cali[obj->cvt.map[MXC622X_AXIS_X]])%(divisor);
+ obj->cali_sw[MXC622X_AXIS_Y] = obj->cvt.sign[MXC622X_AXIS_Y]*(cali[obj->cvt.map[MXC622X_AXIS_Y]])%(divisor);
+ obj->cali_sw[MXC622X_AXIS_Z] = obj->cvt.sign[MXC622X_AXIS_Z]*(cali[obj->cvt.map[MXC622X_AXIS_Z]])%(divisor);
+
+ GSE_LOG("NEWOFF: (%+3d %+3d %+3d): (%+3d %+3d %+3d) / (%+3d %+3d %+3d)\n", 
+	 obj->offset[MXC622X_AXIS_X]*divisor + obj->cali_sw[MXC622X_AXIS_X], 
+	 obj->offset[MXC622X_AXIS_Y]*divisor + obj->cali_sw[MXC622X_AXIS_Y], 
+	 obj->offset[MXC622X_AXIS_Z]*divisor + obj->cali_sw[MXC622X_AXIS_Z], 
+	 obj->offset[MXC622X_AXIS_X], obj->offset[MXC622X_AXIS_Y], obj->offset[MXC622X_AXIS_Z],
+	 obj->cali_sw[MXC622X_AXIS_X], obj->cali_sw[MXC622X_AXIS_Y], obj->cali_sw[MXC622X_AXIS_Z]);
+
+ if(err = hwmsen_write_block(obj->client, MXC622X_REG_OFSX, obj->offset, MXC622X_AXES_NUM))
+ {
+	 GSE_ERR("write offset fail: %d\n", err);
+	 return err;
+ }
 #endif
-	int raw[MXC622X_AXES_NUM];
-	if((err = MXC622X_ReadCalibrationEx(client, cali, raw)))	/*offset will be updated in obj->offset*/
-	{
-		GSE_ERR("read offset fail, %d\n", err);
-		return err;
-	}
-
-	GSE_DEBUG("OLDOFF: (%+3d %+3d %+3d): (%+3d %+3d %+3d) / (%+3d %+3d %+3d)\n",
-			raw[MXC622X_AXIS_X], raw[MXC622X_AXIS_Y], raw[MXC622X_AXIS_Z],
-			obj->offset[MXC622X_AXIS_X], obj->offset[MXC622X_AXIS_Y], obj->offset[MXC622X_AXIS_Z],
-			obj->cali_sw[MXC622X_AXIS_X], obj->cali_sw[MXC622X_AXIS_Y], obj->cali_sw[MXC622X_AXIS_Z]);
-
-	/*calculate the real offset expected by caller*/
-	cali[MXC622X_AXIS_X] += dat[MXC622X_AXIS_X];
-	cali[MXC622X_AXIS_Y] += dat[MXC622X_AXIS_Y];
-	cali[MXC622X_AXIS_Z] += dat[MXC622X_AXIS_Z];
-
-	GSE_DEBUG("UPDATE: (%+3d %+3d %+3d)\n",
-			dat[MXC622X_AXIS_X], dat[MXC622X_AXIS_Y], dat[MXC622X_AXIS_Z]);
-
-#ifdef SW_CALIBRATION
-	obj->cali_sw[MXC622X_AXIS_X] = obj->cvt.sign[MXC622X_AXIS_X]*(cali[obj->cvt.map[MXC622X_AXIS_X]]);
-	obj->cali_sw[MXC622X_AXIS_Y] = obj->cvt.sign[MXC622X_AXIS_Y]*(cali[obj->cvt.map[MXC622X_AXIS_Y]]);
-	obj->cali_sw[MXC622X_AXIS_Z] = obj->cvt.sign[MXC622X_AXIS_Z]*(cali[obj->cvt.map[MXC622X_AXIS_Z]]);
-#else
-//	int divisor = obj->reso->sensitivity/lsb;//modified
-	obj->offset[MXC622X_AXIS_X] = (s8)(obj->cvt.sign[MXC622X_AXIS_X]*(cali[obj->cvt.map[MXC622X_AXIS_X]])/(divisor));
-	obj->offset[MXC622X_AXIS_Y] = (s8)(obj->cvt.sign[MXC622X_AXIS_Y]*(cali[obj->cvt.map[MXC622X_AXIS_Y]])/(divisor));
-	obj->offset[MXC622X_AXIS_Z] = (s8)(obj->cvt.sign[MXC622X_AXIS_Z]*(cali[obj->cvt.map[MXC622X_AXIS_Z]])/(divisor));
-
-	/*convert software calibration using standard calibration*/
-	obj->cali_sw[MXC622X_AXIS_X] = obj->cvt.sign[MXC622X_AXIS_X]*(cali[obj->cvt.map[MXC622X_AXIS_X]])%(divisor);
-	obj->cali_sw[MXC622X_AXIS_Y] = obj->cvt.sign[MXC622X_AXIS_Y]*(cali[obj->cvt.map[MXC622X_AXIS_Y]])%(divisor);
-	obj->cali_sw[MXC622X_AXIS_Z] = obj->cvt.sign[MXC622X_AXIS_Z]*(cali[obj->cvt.map[MXC622X_AXIS_Z]])%(divisor);
-
-	GSE_DEBUG("NEWOFF: (%+3d %+3d %+3d): (%+3d %+3d %+3d) / (%+3d %+3d %+3d)\n",
-			obj->offset[MXC622X_AXIS_X]*divisor + obj->cali_sw[MXC622X_AXIS_X],
-			obj->offset[MXC622X_AXIS_Y]*divisor + obj->cali_sw[MXC622X_AXIS_Y],
-			obj->offset[MXC622X_AXIS_Z]*divisor + obj->cali_sw[MXC622X_AXIS_Z],
-			obj->offset[MXC622X_AXIS_X], obj->offset[MXC622X_AXIS_Y], obj->offset[MXC622X_AXIS_Z],
-			obj->cali_sw[MXC622X_AXIS_X], obj->cali_sw[MXC622X_AXIS_Y], obj->cali_sw[MXC622X_AXIS_Z]);
-
 #endif
-	msleep(4);
-	return err;
+
+ return err;
+}
+/*----------------------------------------------------------------------------*/
+static int MXC622X_SetPowerMode(struct i2c_client *client, bool enable)
+{
+ u8 databuf[2];    
+ int res = 0;
+// u8 addr = MXC622X_REG_DETECTION;
+ struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
+ 
+ 
+ if(enable == sensor_power )
+ {
+	 GSE_LOG("Sensor power status is newest!\n");
+	 return MXC622X_SUCCESS;
+ }
+#if 0	 
+ if(hwmsen_read_block(client, addr, databuf, 0x01))
+ {
+	 GSE_ERR("read power ctl register err!\n");
+	 return MXC622X_ERR_I2C;
+ }
+#endif	 
+ 
+ if(enable == 1)
+ {
+	 databuf[1] =0x00;
+ }
+ else
+ {
+	 databuf[1] =0x01<<7;
+ }
+ 
+ databuf[0] = MXC622X_REG_DETECTION;
+ 
+
+ res = cust_i2c_master_send(client, databuf, 0x2);
+
+ if(res <= 0)
+ {
+	 GSE_LOG("set power mode failed!\n");
+	 return MXC622X_ERR_I2C;
+ }
+ else if(atomic_read(&obj->trace) & ADX_TRC_INFO)
+ {
+	 GSE_LOG("set power mode ok %d!\n", databuf[1]);
+ }
+
+ //GSE_LOG("MXC622X_SetPowerMode ok!\n");
+
+
+ sensor_power = enable;
+
+ mdelay(20);
+ 
+ return MXC622X_SUCCESS;    
+}
+/*----------------------------------------------------------------------------*/
+static int MXC622X_SetDataFormat(struct i2c_client *client, u8 dataformat)
+{
+
+ struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
+// u8 databuf[10];	
+// int res = 0;
+#if 0
+ memset(databuf, 0, sizeof(u8)*10);    
+
+ if(hwmsen_read_block(client, MXC622X_REG_DATA_FORMAT, databuf, 0x01))
+ {
+	 printk("mxc622x read Dataformat failt \n");
+	 return MXC622X_ERR_I2C;
+ }
+
+ databuf[0] &= ~MXC622X_RANGE_MASK;
+ databuf[0] |= dataformat;
+ databuf[1] = databuf[0];
+ databuf[0] = MXC622X_REG_DATA_FORMAT;
+
+
+ res = cust_i2c_master_send(client, databuf, 0x2);
+
+ if(res <= 0)
+ {
+	 return MXC622X_ERR_I2C;
+ }
+ 
+ //printk("MXC622X_SetDataFormat OK! \n");
+ 
+#endif
+ return MXC622X_SetDataResolution(obj);	  
+}
+/*----------------------------------------------------------------------------*/
+static int MXC622X_SetBWRate(struct i2c_client *client, u8 bwrate)
+{
+#if 0
+ u8 databuf[10];	
+ int res = 0;
+
+ memset(databuf, 0, sizeof(u8)*10);    
+
+ if(hwmsen_read_block(client, MXC622X_REG_BW_RATE, databuf, 0x01))
+ {
+	 printk("mxc622x read rate failt \n");
+	 return MXC622X_ERR_I2C;
+ }
+
+ databuf[0] &= ~MXC622X_BW_MASK;
+ databuf[0] |= bwrate;
+ databuf[1] = databuf[0];
+ databuf[0] = MXC622X_REG_BW_RATE;
+
+
+ res = cust_i2c_master_send(client, databuf, 0x2);
+
+ if(res <= 0)
+ {
+	 return MXC622X_ERR_I2C;
+ }
+ 
+ //printk("MXC622X_SetBWRate OK! \n");
+#endif	 
+ return MXC622X_SUCCESS;    
+}
+/*----------------------------------------------------------------------------*/
+static int MXC622X_SetIntEnable(struct i2c_client *client, u8 intenable)
+{
+#if 0
+		 u8 databuf[10];	
+		 int res = 0;
+	 
+		 res = hwmsen_write_byte(client, MXC622X_INT_REG, 0x00);
+		 if(res != MXC622X_SUCCESS) 
+		 {
+			 return res;
+		 }
+		 printk("MXC622X disable interrupt ...\n");
+	 
+		 /*for disable interrupt function*/
+#endif			 
+		 return MXC622X_SUCCESS;    
 }
 
 static int MXC622X_CheckDeviceID(struct i2c_client *client)
 {
-	u8 databuf[10];
-	int res = 0;
+ u8 databuf[10];
+ int res = 0;
 
-	memset(databuf, 0, sizeof(u8)*10);
-	databuf[0] = MXC622X_REG_ID;
-  msleep(12);
-	res = mxc622x_i2c_read_block(client,MXC622X_REG_ID,databuf,0x01);
-	if (res)
-	{
-		GSE_ERR("MXC622X Device ID read faild\n");
-		return MXC622X_ERR_I2C;
+ while(res < 50)
+ {
+cust_hwmsen_read_block(client, 0x08, databuf, 1);
+msleep(1);
 
-	}
+ printk("zhaofei databuf[0] is %x  data&0x3F=%x\n", databuf[0],databuf[0]&0x3F);
+ res++;
 
+ if( (databuf[0] & 0x3F) == 0x5)
+	 break;
+ }
+ if(res > 10)
+	 return -1;
 
-	databuf[0]= (databuf[0]&0x3f);
-
-	if((databuf[0]!= MXC622X_ID_1) && (databuf[0] != MXC622X_ID_2))
-	{
-		return MXC622X_ERR_IDENTIFICATION;
-	}
-
-	GSE_INFO("MXC622X_CheckDeviceID %d done!\n ", databuf[0]);
-
-	return MXC622X_SUCCESS;
+		 return MXC622X_SUCCESS;    
 }
 
-
-static int MXC622X_SetPowerMode(struct i2c_client *client, bool enable)
-{
-	u8 databuf[2] = {0};
-	int res = 0, i=0;
-
-	if(enable == 1)
-	{
-		databuf[1] = MXC622X_AWAKE;
-	}
-	else
-	{
-		databuf[1] = MXC622X_SLEEP;
-	}
-	msleep(MXC622X_STABLE_DELAY);
-	databuf[0] = MXC622X_REG_CTRL;
-	while (i++ < 3)
-	{
-		res = i2c_master_send(client, databuf, 0x2);
-		msleep(5);
-		if(res > 0)
-			break;
-	}
-
-	if(res <= 0)
-	{
-		GSE_ERR("memsic set power mode failed!\n");
-		return MXC622X_ERR_I2C;
-	}
-	sensor_power = enable;
-#ifdef USE_DELAY
-	delay_state = enable;
-#else
-	msleep(300);
-#endif
-	return MXC622X_SUCCESS;
-}
-static int MXC622X_SetDataFormat(struct i2c_client *client, u8 dataformat)
-{
-	struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
-	u8 databuf[10];
-	int res = 0;
-
-	memset(databuf, 0, sizeof(u8)*10);
-	databuf[0] = MXC622X_REG_CTRL;
-	databuf[1] = MXC622X_RANGE_8G;
-
-	res = i2c_master_send(client, databuf, 0x2);
-	if(res <= 0)
-	{
-		GSE_ERR("set power mode failed!\n");
-		return MXC622X_ERR_I2C;
-	}
-
-	return MXC622X_SetDataResolution(obj);
-}
-static int MXC622X_SetBWRate(struct i2c_client *client, u8 bwrate)
-{
-	u8 databuf[10];
-
-	memset(databuf, 0, sizeof(u8)*10);
-
-	return MXC622X_SUCCESS;
-}
-
+/*----------------------------------------------------------------------------*/
 static int mxc622x_init_client(struct i2c_client *client, int reset_cali)
 {
-	 struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
-	 int res = 0;
+ struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
+ int res = 0;
+ res = MXC622X_CheckDeviceID(client); 
+ if(res != MXC622X_SUCCESS)
+ {
+	 return res;
+ }	 
+ 
+ res = MXC622X_SetPowerMode(client, false);
+ if(res != MXC622X_SUCCESS)
+ {
+	 return res;
+ }
+ printk("MXC622X_SetPowerMode OK!\n");
+ 
+ res = MXC622X_SetBWRate(client, MXC622X_BW_100HZ);
+ if(res != MXC622X_SUCCESS ) 
+ {
+	 return res;
+ }
+ printk("MXC622X_SetBWRate OK!\n");
+ 
+ res = MXC622X_SetDataFormat(client, MXC622X_RANGE_2G);
+ if(res != MXC622X_SUCCESS) 
+ {
+	 return res;
+ }
+ printk("MXC622X_SetDataFormat OK!\n");
 
-	 GSE_DEBUG_FUNC();
-	 res = MXC622X_SetPowerMode(client, true);
+ gsensor_gain.x = gsensor_gain.y = gsensor_gain.z = obj->reso->sensitivity;
+
+
+ res = MXC622X_SetIntEnable(client, 0x00);		 
+ if(res != MXC622X_SUCCESS)
+ {
+	 return res;
+ }
+ printk("MXC622X disable interrupt function!\n");
+
+
+ if(0 != reset_cali)
+ { 
+	 /*reset calibration only in power on*/
+	 res = MXC622X_ResetCalibration(client);
 	 if(res != MXC622X_SUCCESS)
 	 {
-		return res;
+		 return res;
 	 }
-	 res = MXC622X_CheckDeviceID(client);
-	 if(res != MXC622X_SUCCESS)
-	 {
-	 	 GSE_ERR("MXC622X check device id failed\n");
-	 	 return res;
-	 }
-
-	res = MXC622X_SetBWRate(client, MXC622X_BW_50HZ);
-	if(res != MXC622X_SUCCESS )
-	{
-		GSE_ERR("MXC622X Set BWRate failed\n");
-		return res;
-	}
-
-	res = MXC622X_SetDataFormat(client, MXC622X_RANGE_8G);
-	if(res != MXC622X_SUCCESS)
-	{
-		return res;
-	}
-
-	gsensor_gain.x = gsensor_gain.y = gsensor_gain.z = obj->reso->sensitivity;
-
-	if(0 != reset_cali)
-	{
-	 	/*reset calibration only in power on*/
-		 res = MXC622X_ResetCalibration(client);
-		 if(res != MXC622X_SUCCESS)
-		 {
-			 return res;
-		 }
-	}
-	GSE_INFO("mxc622x_init_client OK!\n");
+ }
+ printk("mxc622x_init_client OK!\n");
 #ifdef CONFIG_MXC622X_LOWPASS
-	memset(&obj->fir, 0x00, sizeof(obj->fir));
+ memset(&obj->fir, 0x00, sizeof(obj->fir));  
 #endif
-	msleep(20);
 
-	return MXC622X_SUCCESS;
+ mdelay(20);
+
+ return MXC622X_SUCCESS;
 }
-
+/*----------------------------------------------------------------------------*/
 static int MXC622X_ReadChipInfo(struct i2c_client *client, char *buf, int bufsize)
 {
-	u8 databuf[10];
+ u8 databuf[10];	
 
-	memset(databuf, 0, sizeof(u8)*10);
+ memset(databuf, 0, sizeof(u8)*10);
 
-	if((NULL == buf)||(bufsize<=30))
-	{
-		return -1;
-	}
+ if((NULL == buf)||(bufsize<=30))
+ {
+	 return -1;
+ }
+ 
+ if(NULL == client)
+ {
+	 *buf = 0;
+	 return -2;
+ }
 
-	if(NULL == client)
-	{
-		*buf = 0;
-		return -2;
-	}
-
-	sprintf(buf, "MXC622X Chip");
-	return 0;
+ sprintf(buf, "MXC622X Chip");
+ return 0;
 }
-
-static int MXC622X_ReadSensorDataFactory(struct i2c_client *client, char *buf, int bufsize)
+/*----------------------------------------------------------------------------*/
+static int MXC622X_ReadSensorData(struct i2c_client *client, char *buf, int bufsize)
 {
-	struct mxc622x_i2c_data *obj = (struct mxc622x_i2c_data*)i2c_get_clientdata(client);
-	u8 databuf[20];
-	int acc[MXC622X_AXES_NUM];
-	int res = 0;
+ struct mxc622x_i2c_data *obj = (struct mxc622x_i2c_data*)i2c_get_clientdata(client);
+ u8 databuf[20];
+ int acc[MXC622X_AXES_NUM];
+ int res = 0;
+ memset(databuf, 0, sizeof(u8)*10);
 
-	GSE_DEBUG_FUNC();
-	memset(databuf, 0, sizeof(u8)*10);
+ if(NULL == buf)
+ {
+	 return -1;
+ }
+ if(NULL == client)
+ {
+	 *buf = 0;
+	 return -2;
+ }
 
-	if(NULL == buf)
+ if(sensor_power == 0)
+ {
+	 res = MXC622X_SetPowerMode(client, true);
+	 if(res)
+	 {
+		 GSE_ERR("Power on mxc622x error %d!\n", res);
+	 }
+ }
+ res = MXC622X_ReadData(client, obj->data);
+ if(res)
+ {		  
+	 GSE_ERR("I2C error: ret value=%d", res);
+	 return -3;
+ }
+ else
+ {
+	 #if 1
+	 obj->data[MXC622X_AXIS_X] = obj->data[MXC622X_AXIS_X] * GRAVITY_EARTH_1000 / obj->reso->sensitivity;
+	 obj->data[MXC622X_AXIS_Y] = obj->data[MXC622X_AXIS_Y] * GRAVITY_EARTH_1000 / obj->reso->sensitivity;
+	#endif
+	 //printk("raw data x=%d, y=%d, z=%d \n",obj->data[MXC622X_AXIS_X],obj->data[MXC622X_AXIS_Y],obj->data[MXC622X_AXIS_Z]);
+	 obj->data[MXC622X_AXIS_X] += obj->cali_sw[MXC622X_AXIS_X];
+	 obj->data[MXC622X_AXIS_Y] += obj->cali_sw[MXC622X_AXIS_Y];
+
+	 
+	 //printk("cali_sw x=%d, y=%d, z=%d \n",obj->cali_sw[MXC622X_AXIS_X],obj->cali_sw[MXC622X_AXIS_Y],obj->cali_sw[MXC622X_AXIS_Z]);
+	 
+	 /*remap coordinate*/
+	 acc[obj->cvt.map[MXC622X_AXIS_X]] = obj->cvt.sign[MXC622X_AXIS_X]*obj->data[MXC622X_AXIS_X];
+	 acc[obj->cvt.map[MXC622X_AXIS_Y]] = obj->cvt.sign[MXC622X_AXIS_Y]*obj->data[MXC622X_AXIS_Y];
+
+	 //printk("cvt x=%d, y=%d, z=%d \n",obj->cvt.sign[MXC622X_AXIS_X],obj->cvt.sign[MXC622X_AXIS_Y],obj->cvt.sign[MXC622X_AXIS_Z]);
+
+	if(atomic_read(&obj->trace) & ADX_TRC_IOCTL)
 	{
-		GSE_ERR("mxc4005 buf is null !!!\n");
-		return -1;
-	}
-	if(NULL == client)
-	{
-		*buf = 0;
-		GSE_ERR("mxc4005 client is null !!!\n");
-		return MXC622X_ERR_STATUS;
-	}
-	if (atomic_read(&obj->suspend)&& !enable_status )
-	{
-		GSE_ERR("mxc4005 sensor in suspend read not data!\n");
-		return MXC622X_ERR_GETGSENSORDATA;
+		GSE_LOG("Mapped gsensor data: %d, %d!\n", acc[MXC622X_AXIS_X], acc[MXC622X_AXIS_Y]);
 	}
 
-	if((res = MXC622X_ReadData(client, obj->data)))
+	 //Out put the mg
+	 //printk("mg acc=%d, GRAVITY=%d, sensityvity=%d \n",acc[MXC622X_AXIS_X],GRAVITY_EARTH_1000,obj->reso->sensitivity);
+	#if 0
+	 acc[MXC622X_AXIS_X] = acc[MXC622X_AXIS_X] * GRAVITY_EARTH_1000 / obj->reso->sensitivity;
+	 acc[MXC622X_AXIS_Y] = acc[MXC622X_AXIS_Y] * GRAVITY_EARTH_1000 / obj->reso->sensitivity;
+	#endif
+	if(atomic_read(&obj->trace) & ADX_TRC_IOCTL)
 	{
-		GSE_ERR("mxc4005 I2C error: ret value=%d", res);
-		return MXC622X_ERR_I2C;
+		GSE_LOG("after * GRAVITY_EARTH_1000 / obj->reso->sensitivity: %d, %d!\n", acc[MXC622X_AXIS_X], acc[MXC622X_AXIS_Y]);
 	}
-	else
-	{
-		obj->data[MXC622X_AXIS_X] += obj->cali_sw[MXC622X_AXIS_X];
-		obj->data[MXC622X_AXIS_Y] += obj->cali_sw[MXC622X_AXIS_Y];
-		obj->data[MXC622X_AXIS_Z] += obj->cali_sw[MXC622X_AXIS_Z];
+ 
+	acc[MXC622X_AXIS_Z] = mxc622x_sqrt(9807, 0, 9807*9807-acc[MXC622X_AXIS_X]*acc[MXC622X_AXIS_X]-acc[MXC622X_AXIS_Y]*acc[MXC622X_AXIS_Y]);
 
-		/*remap coordinate*/
-		acc[obj->cvt.map[MXC622X_AXIS_X]] = obj->cvt.sign[MXC622X_AXIS_X]*obj->data[MXC622X_AXIS_X];
-		acc[obj->cvt.map[MXC622X_AXIS_Y]] = obj->cvt.sign[MXC622X_AXIS_Y]*obj->data[MXC622X_AXIS_Y];
-		acc[obj->cvt.map[MXC622X_AXIS_Z]] = obj->cvt.sign[MXC622X_AXIS_Z]*obj->data[MXC622X_AXIS_Z];
-
-		//Out put the mg
-		acc[MXC622X_AXIS_X] = acc[MXC622X_AXIS_X] * GRAVITY_EARTH_1000 / obj->reso->sensitivity;
-		acc[MXC622X_AXIS_Y] = acc[MXC622X_AXIS_Y] * GRAVITY_EARTH_1000 / obj->reso->sensitivity;
-		acc[MXC622X_AXIS_Z] = acc[MXC622X_AXIS_Z] * GRAVITY_EARTH_1000 / obj->reso->sensitivity;
-		sprintf(buf, "factory_read_mxc622x: acc: x:%04x y:%04x z:%04x",acc[MXC622X_AXIS_X],acc[MXC622X_AXIS_Y],cali_sensor_data);
-
-	}
-	return res;
+	 sprintf(buf, "%04x %04x %04x", acc[MXC622X_AXIS_X], acc[MXC622X_AXIS_Y], acc[MXC622X_AXIS_Z]);
+	 if(atomic_read(&obj->trace) & ADX_TRC_IOCTL)
+	 {
+		 GSE_LOG("gsensor data: %s!\n", buf);
+	 }
+ }
+ 
+ return 0;
 }
-
-
-
-static int MXC622X_ReadSensorData(struct i2c_client *client, int *buf, int bufsize)
-{
-	struct mxc622x_i2c_data *obj = (struct mxc622x_i2c_data*)i2c_get_clientdata(client);
-	u8 databuf[20];
-	int acc[MXC622X_AXES_NUM] = {0};
-	int res = 0;
-	GSE_DEBUG_FUNC();
-
-	memset(databuf, 0, sizeof(u8)*10);
-
-	if(NULL == buf)
-	{
-		GSE_ERR("buf is null !!!\n");
-		return -1;
-	}
-	if(NULL == client)
-	{
-		*buf = 0;
-		GSE_ERR("client is null !!!\n");
-		return MXC622X_ERR_STATUS;
-	}
-
-	if (atomic_read(&obj->suspend) && !enable_status)
-	{
-		GSE_DEBUG("sensor in suspend read not data!\n");
-		return MXC622X_ERR_GETGSENSORDATA;
-	}
-
-
-	if((res = MXC622X_ReadData(client, obj->data)))
-	{
-		GSE_ERR("I2C error: ret value=%d", res);
-		return MXC622X_ERR_I2C;
-	}
-	else
-	{
-		obj->data[MXC622X_AXIS_X] += obj->cali_sw[MXC622X_AXIS_X];
-		obj->data[MXC622X_AXIS_Y] += obj->cali_sw[MXC622X_AXIS_Y];
-		obj->data[MXC622X_AXIS_Z] += obj->cali_sw[MXC622X_AXIS_Z];
-
-		/*remap coordinate*/
-		acc[obj->cvt.map[MXC622X_AXIS_X]] = obj->cvt.sign[MXC622X_AXIS_X]*obj->data[MXC622X_AXIS_X];
-		acc[obj->cvt.map[MXC622X_AXIS_Y]] = obj->cvt.sign[MXC622X_AXIS_Y]*obj->data[MXC622X_AXIS_Y];
-		acc[obj->cvt.map[MXC622X_AXIS_Z]] = obj->cvt.sign[MXC622X_AXIS_Z]*obj->data[MXC622X_AXIS_Z];
-
-		//Out put the mg
-		acc[MXC622X_AXIS_X] = acc[MXC622X_AXIS_X] * GRAVITY_EARTH_1000 / obj->reso->sensitivity;
-		acc[MXC622X_AXIS_Y] = acc[MXC622X_AXIS_Y] * GRAVITY_EARTH_1000 / obj->reso->sensitivity;
-		acc[MXC622X_AXIS_Z] = acc[MXC622X_AXIS_Z] * GRAVITY_EARTH_1000 / obj->reso->sensitivity;
-		buf[0] = acc[MXC622X_AXIS_X];
-		buf[1] = acc[MXC622X_AXIS_Y];
-		buf[2] = acc[MXC622X_AXIS_Z];
-
-	}
-
-	return res;
-}
-
+/*----------------------------------------------------------------------------*/
 static int MXC622X_ReadRawData(struct i2c_client *client, char *buf)
 {
-	struct mxc622x_i2c_data *obj = (struct mxc622x_i2c_data*)i2c_get_clientdata(client);
-	int res = 0;
+ struct mxc622x_i2c_data *obj = (struct mxc622x_i2c_data*)i2c_get_clientdata(client);
+ int res = 0;
 
-	if (!buf || !client)
-	{
-        GSE_ERR(" buf or client is null !!\n");
-		return EINVAL;
-	}
-
-	if((res = MXC622X_ReadData(client, obj->data)))
-	{
-		GSE_ERR("I2C error: ret value=%d\n", res);
-		return EIO;
-	}
-	else
-	{
-		buf[0] = (int)obj->data[MXC622X_AXIS_X];
-		buf[1] = (int)obj->data[MXC622X_AXIS_Y];
-		buf[2] = (int)obj->data[MXC622X_AXIS_Z];
-	}
-
-	return 0;
+ if (!buf || !client)
+ {
+	 return EINVAL;
+ }
+ res = MXC622X_ReadData(client, obj->data);
+ if(res)
+ {		  
+	 GSE_ERR("I2C error: ret value=%d", res);
+	 return EIO;
+ }
+ else
+ {
+	 sprintf(buf, "MXC622X_ReadRawData %04x %04x", obj->data[MXC622X_AXIS_X], 
+		 obj->data[MXC622X_AXIS_Y]);
+ 
+ }
+ 
+ return 0;
 }
-
-
+/*----------------------------------------------------------------------------*/
 static ssize_t show_chipinfo_value(struct device_driver *ddri, char *buf)
 {
-	struct i2c_client *client = mxc622x_i2c_client;
-	char strbuf[MXC622X_BUFSIZE];
-	if(NULL == client)
-	{
-		GSE_ERR("i2c client is null!!\n");
-		return 0;
-	}
-
-	MXC622X_ReadChipInfo(client, strbuf, MXC622X_BUFSIZE);
-	return snprintf(buf, PAGE_SIZE, "%s\n", (char*)strbuf);
+ struct i2c_client *client = mxc622x_i2c_client;
+ char strbuf[MXC622X_BUFSIZE];
+ if(NULL == client)
+ {
+	 GSE_ERR("i2c client is null!!\n");
+	 return 0;
+ }
+ 
+ MXC622X_ReadChipInfo(client, strbuf, MXC622X_BUFSIZE);
+ return snprintf(buf, PAGE_SIZE, "%s\n", strbuf);		 
 }
-
+ 
+/*----------------------------------------------------------------------------*/
 static ssize_t show_sensordata_value(struct device_driver *ddri, char *buf)
 {
-	struct i2c_client *client = mxc622x_i2c_client;
-	int strbuf[MXC622X_BUFSIZE] = {0};
-	if(NULL == client)
-	{
-		GSE_ERR("i2c client is null!!\n");
-		return 0;
-	}
-	MXC622X_ReadSensorData(client, strbuf, MXC622X_BUFSIZE);
-	return snprintf(buf, PAGE_SIZE, "%s\n", (char*)strbuf);
+ struct i2c_client *client = mxc622x_i2c_client;
+ char strbuf[MXC622X_BUFSIZE];
+ 
+ if(NULL == client)
+ {
+	 GSE_ERR("i2c client is null!!\n");
+	 return 0;
+ }
+ MXC622X_ReadSensorData(client, strbuf, MXC622X_BUFSIZE);
+ //MXC622X_ReadRawData(client, strbuf);
+ return snprintf(buf, PAGE_SIZE, "%s\n", strbuf);			 
 }
 
+#if 0
+static ssize_t show_sensorrawdata_value(struct device_driver *ddri, char *buf, size_t count)
+ {
+	 struct i2c_client *client = mxc622x_i2c_client;
+	 char strbuf[MXC622X_BUFSIZE];
+	 
+	 if(NULL == client)
+	 {
+		 GSE_ERR("i2c client is null!!\n");
+		 return 0;
+	 }
+	 //MXC622X_ReadSensorData(client, strbuf, MXC622X_BUFSIZE);
+	 MXC622X_ReadRawData(client, strbuf);
+	 return snprintf(buf, PAGE_SIZE, "%s\n", strbuf);			 
+ }
+#endif
+/*----------------------------------------------------------------------------*/
 static ssize_t show_cali_value(struct device_driver *ddri, char *buf)
 {
-	struct i2c_client *client = mxc622x_i2c_client;
-	struct mxc622x_i2c_data *obj;
-	int err, len = 0, mul;
-	int tmp[MXC622X_AXES_NUM];
+ struct i2c_client *client = mxc622x_i2c_client;
+ struct mxc622x_i2c_data *obj;
+ int err, len = 0, mul;
+ int tmp[MXC622X_AXES_NUM];
 
-	if(NULL == client)
-	{
-		GSE_ERR("i2c client is null!!\n");
-		return MXC622X_ERR_STATUS;
-	}
+ if(NULL == client)
+ {
+	 GSE_ERR("i2c client is null!!\n");
+	 return 0;
+ }
 
-	obj = i2c_get_clientdata(client);
+ obj = i2c_get_clientdata(client);
 
 
+ err = MXC622X_ReadOffset(client, obj->offset);
+ if(err)
+ {
+	 return -EINVAL;
+ }
+ err = MXC622X_ReadCalibration(client, tmp);
+ if(err )
+ {
+	 return -EINVAL;
+ }
+ 
+ 	  
+	 mul = obj->reso->sensitivity/mxc622x_offset_resolution.sensitivity;
+	 len += snprintf(buf+len, PAGE_SIZE-len, "[HW ][%d] (%+3d, %+3d) : (0x%02X, 0x%02X)\n", mul,						  
+		 obj->offset[MXC622X_AXIS_X], obj->offset[MXC622X_AXIS_Y],
+		 obj->offset[MXC622X_AXIS_X], obj->offset[MXC622X_AXIS_Y]);
+	 len += snprintf(buf+len, PAGE_SIZE-len, "[SW ][%d] (%+3d, %+3d)\n", 1, 
+		 obj->cali_sw[MXC622X_AXIS_X], obj->cali_sw[MXC622X_AXIS_Y]);
 
-	if((err = MXC622X_ReadOffset(client, obj->offset)))
-	{
-		return -EINVAL;
-	}
-	else if((err = MXC622X_ReadCalibration(client, tmp)))
-	{
-		return -EINVAL;
-	}
-	else
-	{
-		mul = obj->reso->sensitivity/mxc622x_offset_resolution.sensitivity;
-		len += snprintf(buf+len, PAGE_SIZE-len, "[HW ][%d] (%+3d, %+3d, %+3d) : (0x%02X, 0x%02X, 0x%02X)\n", mul,
-			obj->offset[MXC622X_AXIS_X], obj->offset[MXC622X_AXIS_Y], obj->offset[MXC622X_AXIS_Z],
-			obj->offset[MXC622X_AXIS_X], obj->offset[MXC622X_AXIS_Y], obj->offset[MXC622X_AXIS_Z]);
-		len += snprintf(buf+len, PAGE_SIZE-len, "[SW ][%d] (%+3d, %+3d, %+3d)\n", 1,
-			obj->cali_sw[MXC622X_AXIS_X], obj->cali_sw[MXC622X_AXIS_Y], obj->cali_sw[MXC622X_AXIS_Z]);
-
-		len += snprintf(buf+len, PAGE_SIZE-len, "[ALL]    (%+3d, %+3d, %+3d) : (%+3d, %+3d, %+3d)\n",
-			obj->offset[MXC622X_AXIS_X]*mul + obj->cali_sw[MXC622X_AXIS_X],
-			obj->offset[MXC622X_AXIS_Y]*mul + obj->cali_sw[MXC622X_AXIS_Y],
-			obj->offset[MXC622X_AXIS_Z]*mul + obj->cali_sw[MXC622X_AXIS_Z],
-			tmp[MXC622X_AXIS_X], tmp[MXC622X_AXIS_Y], tmp[MXC622X_AXIS_Z]);
-
-		return len;
-    }
+	 len += snprintf(buf+len, PAGE_SIZE-len, "[ALL]    (%+3d, %+3d) : (%+3d, %+3d)\n", 
+		 obj->offset[MXC622X_AXIS_X]*mul + obj->cali_sw[MXC622X_AXIS_X],
+		 obj->offset[MXC622X_AXIS_Y]*mul + obj->cali_sw[MXC622X_AXIS_Y],
+		 tmp[MXC622X_AXIS_X], tmp[MXC622X_AXIS_Y]);
+	 
+	 return len;
+ 
 }
 /*----------------------------------------------------------------------------*/
 static ssize_t store_cali_value(struct device_driver *ddri, const char *buf, size_t count)
 {
-	struct i2c_client *client = mxc622x_i2c_client;
-	int err, x, y, z;
-	int dat[MXC622X_AXES_NUM];
+ struct i2c_client *client = mxc622x_i2c_client;  
+ int err, x, y;//, z;
+ int dat[MXC622X_AXES_NUM];
 
-	if(!strncmp(buf, "rst", 3))
-	{
-		if((err = MXC622X_ResetCalibration(client)))
-		{
-			GSE_ERR("reset offset err = %d\n", err);
-		}
-	}
-	else if(3 == sscanf(buf, "0x%02X 0x%02X 0x%02X", &x, &y, &z))
-	{
-		dat[MXC622X_AXIS_X] = x;
-		dat[MXC622X_AXIS_Y] = y;
-	//	dat[MXC622X_AXIS_Z] = z;
-		if((err = MXC622X_WriteCalibration(client, dat)))
-		{
-			GSE_ERR("write calibration err = %d\n", err);
-		}
-	}
-	else
-	{
-		GSE_ERR("invalid format\n");
-	}
-
-	return 0;
+ if(!strncmp(buf, "rst", 3))
+ {
+	 err = MXC622X_ResetCalibration(client);
+	 if(err)
+	 {
+		 GSE_ERR("reset offset err = %d\n", err);
+	 }	 
+ }
+ else if(2 == sscanf(buf, "0x%02X 0x%02X", &x, &y))
+ {
+	 dat[MXC622X_AXIS_X] = x;
+	 dat[MXC622X_AXIS_Y] = y;
+	 err = MXC622X_WriteCalibration(client, dat);
+	 if(err)
+	 {
+		 GSE_ERR("write calibration err = %d\n", err);
+	 }		 
+ }
+ else
+ {
+	 GSE_ERR("invalid format\n");
+ }
+ 
+ return count;
 }
+
+/*----------------------------------------------------------------------------*/
 static ssize_t show_firlen_value(struct device_driver *ddri, char *buf)
 {
 #ifdef CONFIG_MXC622X_LOWPASS
-	struct i2c_client *client = mxc622x_i2c_client;
-	struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
-	if(atomic_read(&obj->firlen))
-	{
-	 	int idx, len = atomic_read(&obj->firlen);
-	 	GSE_DEBUG("len = %2d, idx = %2d\n", obj->fir.num, obj->fir.idx);
+ struct i2c_client *client = mxc622x_i2c_client;
+ struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
+ if(atomic_read(&obj->firlen))
+ {
+	 int idx, len = atomic_read(&obj->firlen);
+	 GSE_LOG("len = %2d, idx = %2d\n", obj->fir.num, obj->fir.idx);
 
-		for(idx = 0; idx < len; idx++)
-		{
-			GSE_INFO("[%5d %5d %5d]\n", obj->fir.raw[idx][MXC622X_AXIS_X], obj->fir.raw[idx][MXC622X_AXIS_Y], obj->fir.raw[idx][MXC622X_AXIS_Z]);
-		}
-
-		GSE_INFO("sum = [%5d %5d %5d]\n", obj->fir.sum[MXC622X_AXIS_X], obj->fir.sum[MXC622X_AXIS_Y], obj->fir.sum[MXC622X_AXIS_Z]);
-		GSE_INFO("avg = [%5d %5d %5d]\n", obj->fir.sum[MXC622X_AXIS_X]/len, obj->fir.sum[MXC622X_AXIS_Y]/len, obj->fir.sum[MXC622X_AXIS_Z]/len);
-	}
-	return snprintf(buf, PAGE_SIZE, "%d\n", atomic_read(&obj->firlen));
+	 for(idx = 0; idx < len; idx++)
+	 {
+		 GSE_LOG("[%5d %5d]\n", obj->fir.raw[idx][MXC622X_AXIS_X], obj->fir.raw[idx][MXC622X_AXIS_Y]);
+	 }
+	 
+	 GSE_LOG("sum = [%5d %5d]\n", obj->fir.sum[MXC622X_AXIS_X], obj->fir.sum[MXC622X_AXIS_Y]);
+	 GSE_LOG("avg = [%5d %5d]\n", obj->fir.sum[MXC622X_AXIS_X]/len, obj->fir.sum[MXC622X_AXIS_Y]/len);
+ }
+ return snprintf(buf, PAGE_SIZE, "%d\n", atomic_read(&obj->firlen));
 #else
-	return snprintf(buf, PAGE_SIZE, "not support\n");
+ return snprintf(buf, PAGE_SIZE, "not support\n");
 #endif
 }
 /*----------------------------------------------------------------------------*/
 static ssize_t store_firlen_value(struct device_driver *ddri, const char *buf, size_t count)
 {
 #ifdef CONFIG_MXC622X_LOWPASS
-	struct i2c_client *client = mxc622x_i2c_client;
-	struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
-	int firlen;
+ struct i2c_client *client = mxc622x_i2c_client;  
+ struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
+ int firlen;
 
-	if(1 != sscanf(buf, "%d", &firlen))
-	{
-		GSE_ERR("invallid format\n");
-	}
-	else if(firlen > C_MAX_FIR_LENGTH)
-	{
-		GSE_ERR("exceeds maximum filter length\n");
-	}
-	else
-	{
-		atomic_set(&obj->firlen, firlen);
-		if(NULL == firlen)
-		{
-			atomic_set(&obj->fir_en, 0);
-		}
-		else
-		{
-			memset(&obj->fir, 0x00, sizeof(obj->fir));
-			atomic_set(&obj->fir_en, 1);
-		}
-	}
-#endif
-	return 0;
+ if(1 != sscanf(buf, "%d", &firlen))
+ {
+	 GSE_ERR("invallid format\n");
+ }
+ else if(firlen > C_MAX_FIR_LENGTH)
+ {
+	 GSE_ERR("exceeds maximum filter length\n");
+ }
+ else
+ { 
+	 atomic_set(&obj->firlen, firlen);
+	 if(NULL == firlen)
+	 {
+		 atomic_set(&obj->fir_en, 0);
+	 }
+	 else
+	 {
+		 memset(&obj->fir, 0x00, sizeof(obj->fir));
+		 atomic_set(&obj->fir_en, 1);
+	 }
+ }
+#endif    
+ return count;
 }
+/*----------------------------------------------------------------------------*/
 static ssize_t show_trace_value(struct device_driver *ddri, char *buf)
 {
-	ssize_t res;
-	struct mxc622x_i2c_data *obj = obj_i2c_data;
-	if (obj == NULL)
-	{
-		GSE_ERR("i2c_data obj is null!!\n");
-		return 0;
-	}
-
-	res = snprintf(buf, PAGE_SIZE, "0x%04X\n", atomic_read(&obj->trace));
-	return res;
+ ssize_t res;
+ struct mxc622x_i2c_data *obj = obj_i2c_data;
+ if (obj == NULL)
+ {
+	 GSE_ERR("i2c_data obj is null!!\n");
+	 return 0;
+ }
+ 
+ res = snprintf(buf, PAGE_SIZE, "0x%04X\n", atomic_read(&obj->trace));	   
+ return res;	
 }
+/*----------------------------------------------------------------------------*/
 static ssize_t store_trace_value(struct device_driver *ddri, const char *buf, size_t count)
 {
-	struct mxc622x_i2c_data *obj = obj_i2c_data;
-	int trace;
-	if (obj == NULL)
-	{
-		GSE_ERR("i2c_data obj is null!!\n");
-		return 0;
-	}
-
-	if(1 == sscanf(buf, "0x%x", &trace))
-	{
-		atomic_set(&obj->trace, trace);
-	}
-	else
-	{
-		GSE_ERR("invalid content: '%s', length = %d\n", buf, (int)count);
-	}
-	return count;
+ struct mxc622x_i2c_data *obj = obj_i2c_data;
+ int trace;
+ if (obj == NULL)
+ {
+	 GSE_ERR("i2c_data obj is null!!\n");
+	 return 0;
+ }
+ 
+ if(1 == sscanf(buf, "0x%x", &trace))
+ {
+	 atomic_set(&obj->trace, trace);
+ }	 
+ else
+ {
+	 //GSE_ERR("invalid content: '%s', length = %d\n", buf, count);
+ }
+ 
+ return count;	  
 }
+/*----------------------------------------------------------------------------*/
 static ssize_t show_status_value(struct device_driver *ddri, char *buf)
 {
-	ssize_t len = 0;
+	ssize_t len = 0;	 
 	struct mxc622x_i2c_data *obj = obj_i2c_data;
 	if (obj == NULL)
 	{
-		GSE_ERR("i2c_data obj is null!!\n");
-		return 0;
-	}
-
-		len += snprintf(buf+len, PAGE_SIZE-len, "CUST: %d %d (%d %d)\n",
-	            obj->hw.i2c_num, obj->hw.direction, obj->hw.power_id, obj->hw.power_vol);
-		len += snprintf(buf+len, PAGE_SIZE-len, "CUST: NULL\n");
-
-	return len;
+		 GSE_ERR("i2c_data obj is null!!\n");
+		 return 0;
+	}	 
+	len += snprintf(buf+len, PAGE_SIZE-len, "CUST: %d %d (%d %d)\n", 
+			 obj->hw.i2c_num, obj->hw.direction, obj->hw.power_id, obj->hw.power_vol);	 
+	return len;	
 }
 /*----------------------------------------------------------------------------*/
 static ssize_t show_power_status_value(struct device_driver *ddri, char *buf)
 {
+ if(sensor_power)
+	 printk("G sensor is in work mode, sensor_power = %d\n", sensor_power);
+ else
+	 printk("G sensor is in standby mode, sensor_power = %d\n", sensor_power);
 
-	if(sensor_power)
-		GSE_INFO("G sensor is in work mode, sensor_power = %d\n", sensor_power);
-	else
-		GSE_INFO("G sensor is in standby mode, sensor_power = %d\n", sensor_power);
-
-	return snprintf(buf, PAGE_SIZE, "%x\n", sensor_power);
+ return 0;
 }
-static ssize_t show_layout_value(struct device_driver *ddri, char *buf)
+	 
+static ssize_t show_chip_orientation(struct device_driver *ddri, char *pbBuf)
 {
-	struct i2c_client *client = mxc622x_i2c_client;
-	struct mxc622x_i2c_data *data = i2c_get_clientdata(client);
+	ssize_t _tLength = 0;
+	struct mxc622x_i2c_data *obj = obj_i2c_data;
 
-	return sprintf(buf, "(%d, %d)\n[%+2d %+2d %+2d]\n[%+2d %+2d %+2d]\n",
-		data->hw.direction,atomic_read(&data->layout),	data->cvt.sign[0], data->cvt.sign[1],
-		data->cvt.sign[2],data->cvt.map[0], data->cvt.map[1], data->cvt.map[2]);
+	if (obj == NULL)
+		return 0;
+
+	GSE_LOG("[%s] default direction: %d\n", __func__, obj->hw.direction);
+
+	_tLength = snprintf(pbBuf, PAGE_SIZE, "default direction = %d\n", obj->hw.direction);
+
+	return _tLength;
 }
+
+
+static ssize_t store_chip_orientation(struct device_driver *ddri, const char *pbBuf, size_t tCount)
+{
+	int _nDirection = 0;
+	struct mxc622x_i2c_data *_pt_i2c_obj = obj_i2c_data;
+
+	if (NULL == _pt_i2c_obj)
+		return 0;
+
+	if (!kstrtoint(pbBuf, 10, &_nDirection)) {
+		if (hwmsen_get_convert(_nDirection, &_pt_i2c_obj->cvt))
+			GSE_ERR("ERR: fail to set direction\n");
+	}
+
+	GSE_LOG("[%s] set direction: %d\n", __func__, _nDirection);
+
+	return tCount;
+}
+
+static u8 i2c_dev_reg;
+
+static ssize_t show_register(struct device_driver *pdri, char *buf)
+{
+	GSE_LOG("i2c_dev_reg is 0x%2x\n", i2c_dev_reg);
+
+	return 0;
+}
+
+static ssize_t store_register(struct device_driver *ddri, const char *buf, size_t count)
+{
+	i2c_dev_reg = simple_strtoul(buf, NULL, 16);
+	GSE_LOG("set i2c_dev_reg = 0x%2x\n", i2c_dev_reg);
+
+	return 0;
+}
+
+static ssize_t store_register_value(struct device_driver *ddri, const char *buf, size_t count)
+{
+	struct mxc622x_i2c_data *obj = obj_i2c_data;
+	u8 databuf[2];
+	unsigned long input_value;
+	int res;
+
+	memset(databuf, 0, sizeof(u8) * 2);
+
+	input_value = simple_strtoul(buf, NULL, 16);
+	GSE_LOG("input_value = 0x%2x\n", (unsigned int)input_value);
+
+	if (NULL == obj) {
+		GSE_ERR("i2c data obj is null!!\n");
+		return 0;
+	}
+
+	databuf[0] = i2c_dev_reg;
+	databuf[1] = input_value;
+	GSE_LOG("databuf[0]=0x%2x  databuf[1]=0x%2x\n", databuf[0], databuf[1]);
+
+	res = i2c_master_send(obj->client, databuf, 0x2);
+
+	if (res <= 0) {
+		return -EINVAL;
+	}
+	return 0;
+
+}
+
+static ssize_t show_register_value(struct device_driver *ddri, char *buf)
+{
+	struct mxc622x_i2c_data *obj = obj_i2c_data;
+	u8 databuf[1];
+
+	memset(databuf, 0, sizeof(u8) * 1);
+
+	if (NULL == obj) {
+		GSE_ERR("i2c data obj is null!!\n");
+		return 0;
+	}
+
+	if (hwmsen_read_block(obj->client, i2c_dev_reg, databuf, 0x01)) {
+		GSE_ERR("read power ctl register err!\n");
+		return -EINVAL;
+	}
+
+	GSE_LOG("i2c_dev_reg=0x%2x  data=0x%2x\n", i2c_dev_reg, databuf[0]);
+
+	return 0;
+
+}
+
+
 /*----------------------------------------------------------------------------*/
-static ssize_t store_layout_value(struct device_driver *ddri, const char *buf, size_t count)
-{
-	struct i2c_client *client = mxc622x_i2c_client;
-	struct mxc622x_i2c_data *data = i2c_get_clientdata(client);
-	int layout = 0;
+static DRIVER_ATTR(chipinfo,	 	S_IRUGO, show_chipinfo_value, 	  NULL);
+static DRIVER_ATTR(sensordata, 		S_IRUGO, show_sensordata_value,	  NULL);
+static DRIVER_ATTR(cali,	S_IWUSR | S_IRUGO, show_cali_value, 	  store_cali_value);
+static DRIVER_ATTR(firlen, 	S_IWUSR | S_IRUGO, show_firlen_value,	  store_firlen_value);
+static DRIVER_ATTR(trace,	S_IWUSR | S_IRUGO, show_trace_value,	  store_trace_value);
+static DRIVER_ATTR(status, 	S_IRUGO, show_status_value,		  NULL);
+static DRIVER_ATTR(powerstatus,		S_IRUGO, show_power_status_value, NULL);
+static DRIVER_ATTR(orientation, S_IWUSR | S_IRUGO, show_chip_orientation, store_chip_orientation);
+static DRIVER_ATTR(i2c, S_IWUSR | S_IRUGO, show_register_value, store_register_value);
+static DRIVER_ATTR(register, S_IWUSR | S_IRUGO, show_register, store_register);
 
-	if(1 == sscanf(buf, "%d", &layout))
-	{
-		atomic_set(&data->layout, layout);
-		if(!hwmsen_get_convert(layout, &data->cvt))
-		{
-			GSE_ERR("HWMSEN_GET_CONVERT function error!\r\n");
-		}
-		else if(!hwmsen_get_convert(data->hw.direction, &data->cvt))
-		{
-			GSE_ERR("invalid layout: %d, restore to %d\n", layout, data->hw.direction);
-		}
-		else
-		{
-			GSE_ERR("invalid layout: (%d, %d)\n", layout, data->hw.direction);
-			hwmsen_get_convert(0, &data->cvt);
-		}
-	}
-	else
-	{
-		GSE_ERR("invalid format = '%s'\n", buf);
-	}
-
-	return count;
-}
-
-static DRIVER_ATTR(chipinfo,	S_IWUSR | S_IRUGO, show_chipinfo_value,		NULL);
-static DRIVER_ATTR(sensordata,	S_IWUSR | S_IRUGO, show_sensordata_value,	NULL);
-static DRIVER_ATTR(cali,	S_IWUSR | S_IRUGO, show_cali_value,		store_cali_value);
-static DRIVER_ATTR(firlen,	S_IWUSR | S_IRUGO, show_firlen_value,		store_firlen_value);
-static DRIVER_ATTR(trace,	S_IWUSR | S_IRUGO, show_trace_value,		store_trace_value);
-static DRIVER_ATTR(layout, 	S_IRUGO | S_IWUSR, show_layout_value,		store_layout_value);
-static DRIVER_ATTR(status, 	S_IRUGO, show_status_value,			NULL);
-static DRIVER_ATTR(powerstatus, S_IRUGO, show_power_status_value,		NULL);
-
+/*----------------------------------------------------------------------------*/
 static struct driver_attribute *mxc622x_attr_list[] = {
-	&driver_attr_chipinfo,     /*chip information*/
-	&driver_attr_sensordata,   /*dump sensor data*/
-	&driver_attr_cali,         /*show calibration data*/
-	&driver_attr_firlen,	   /*filter length: 0: disable, others: enable*/
-	&driver_attr_trace,		   /*trace log*/
-	&driver_attr_layout,
+	&driver_attr_chipinfo, 	/*chip information*/
+	&driver_attr_sensordata,	/*dump sensor data*/
+	&driver_attr_cali, 		/*show calibration data*/
+	&driver_attr_firlen,		/*filter length: 0: disable, others: enable*/
+	&driver_attr_trace,		/*trace log*/
 	&driver_attr_status,
 	&driver_attr_powerstatus,
+	&driver_attr_orientation,
+	&driver_attr_register,
+	&driver_attr_i2c,
 };
-static int mxc622x_create_attr(struct device_driver *driver)
+/*----------------------------------------------------------------------------*/
+static int mxc622x_create_attr(struct device_driver *driver) 
 {
-	int idx, err = 0;
-	int num = (int)(sizeof(mxc622x_attr_list)/sizeof(mxc622x_attr_list[0]));
-	if (driver == NULL)
-	{
-		return -EINVAL;
-	}
+ int idx, err = 0;
+ int num = (int)(sizeof(mxc622x_attr_list)/sizeof(mxc622x_attr_list[0]));
+ if (driver == NULL)
+ {
+	 return -EINVAL;
+ }
 
-	for(idx = 0; idx < num; idx++)
-	{
-		if((err = driver_create_file(driver, mxc622x_attr_list[idx])))
-		{
-			GSE_ERR("driver_create_file (%s) = %d\n", mxc622x_attr_list[idx]->attr.name, err);
-			break;
-		}
-	}
-	return err;
-}
-static int mxc622x_delete_attr(struct device_driver *driver)
-{
-	int idx ,err = 0;
-	int num = (int)(sizeof(mxc622x_attr_list)/sizeof(mxc622x_attr_list[0]));
-
-	if(driver == NULL)
-	{
-		return -EINVAL;
-	}
-
-
-	for(idx = 0; idx < num; idx++)
-	{
-		driver_remove_file(driver, mxc622x_attr_list[idx]);
-	}
-
-	return err;
-}
-/******************************************************************************
- * Function Configuration
-******************************************************************************/
-static int mxc622x_open(struct inode *inode, struct file *file)
-{
-	 file->private_data = mxc622x_i2c_client;
-
-	 if(file->private_data == NULL)
-	 {
-		 GSE_ERR("null mxc622x!!\n");
-		 return -EINVAL;
+ for(idx = 0; idx < num; idx++)
+ {
+	 err = driver_create_file(driver, mxc622x_attr_list[idx]);
+	 if(err)
+	 {			  
+		 GSE_ERR("driver_create_file (%s) = %d\n", mxc622x_attr_list[idx]->attr.name, err);
+		 break;
 	 }
-	 return nonseekable_open(inode, file);
+ }	  
+ return err;
 }
 /*----------------------------------------------------------------------------*/
-static int mxc622x_release(struct inode *inode, struct file *file)
+static int mxc622x_delete_attr(struct device_driver *driver)
 {
-	 file->private_data = NULL;
-	 return 0;
+ int idx ,err = 0;
+ int num = (int)(sizeof(mxc622x_attr_list)/sizeof(mxc622x_attr_list[0]));
+
+ if(driver == NULL)
+ {
+	 return -EINVAL;
+ }
+ 
+
+ for(idx = 0; idx < num; idx++)
+ {
+	 driver_remove_file(driver, mxc622x_attr_list[idx]);
+ }
+ 
+
+ return err;
 }
 
-#ifdef CONFIG_COMPAT
-static long mxc622x_compat_ioctl(struct file *file, unsigned int cmd,
-       unsigned long arg)
+/*----------------------------------------------------------------------------*/
+static int mxc622x_suspend(struct i2c_client *client, pm_message_t msg) 
 {
-    long err = 0;
+ struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);	  
+ int err = 0;
+ GSE_FUN();    
 
-	void __user *arg64 = compat_ptr(arg);
-
-	if (!file->f_op || !file->f_op->unlocked_ioctl)
-		return -ENOTTY;
-
-	switch (cmd)
-	{
-		case COMPAT_GSENSOR_IOCTL_INIT:
-			err = file->f_op->unlocked_ioctl(file, GSENSOR_IOCTL_INIT, (unsigned long)arg64);
-			if(err < 0)
-				{
-					GSE_ERR("COMPAT_MMC31XX_IOC_TM is failed!\n");
-				}
-				break;
-		case COMPAT_GSENSOR_IOCTL_READ_CHIPINFO:
-			err = file->f_op->unlocked_ioctl(file, GSENSOR_IOCTL_READ_CHIPINFO, (unsigned long)arg64);
-			if(err < 0)
-				{
-					GSE_ERR("COMPAT_GSENSOR_IOCTL_READ_CHIPINFO is failed!\n");
-				}
-				break;
-		case COMPAT_GSENSOR_IOCTL_READ_SENSORDATA:
-			err = file->f_op->unlocked_ioctl(file, GSENSOR_IOCTL_READ_SENSORDATA, (unsigned long)arg64);
-			if(err < 0)
-				{
-					GSE_ERR("COMPAT_GSENSOR_IOCTL_READ_SENSORDATA is failed!\n");
-				}
-				break;
-		case COMPAT_GSENSOR_IOCTL_READ_GAIN:
-			err = file->f_op->unlocked_ioctl(file, GSENSOR_IOCTL_READ_GAIN, (unsigned long)arg64);
-			if(err < 0)
-				{
-					GSE_ERR("COMPAT_GSENSOR_IOCTL_READ_GAIN is failed!\n");
-				}
-				break;
-		case COMPAT_GSENSOR_IOCTL_READ_RAW_DATA:
-			err = file->f_op->unlocked_ioctl(file, GSENSOR_IOCTL_READ_RAW_DATA, (unsigned long)arg64);
-			if(err < 0)
-				{
-					GSE_ERR("COMPAT_GSENSOR_IOCTL_READ_RAW_DATA is failed!\n");
-				}
-				break;
-
-		case COMPAT_GSENSOR_IOCTL_SET_CALI:
-			err = file->f_op->unlocked_ioctl(file, GSENSOR_IOCTL_SET_CALI, (unsigned long)arg64);
-			if(err < 0)
-				{
-					GSE_ERR("COMPAT_GSENSOR_IOCTL_SET_CALI is failed!\n");
-				}
-				break;
-		case COMPAT_GSENSOR_IOCTL_CLR_CALI:
-			err = file->f_op->unlocked_ioctl(file, GSENSOR_IOCTL_CLR_CALI, (unsigned long)arg64);
-			if(err < 0)
-				{
-					GSE_ERR("COMPAT_GSENSOR_IOCTL_CLR_CALI is failed!\n");
-				}
-				break;
-
-		case COMPAT_GSENSOR_IOCTL_GET_CALI:
-			err = file->f_op->unlocked_ioctl(file, GSENSOR_IOCTL_GET_CALI, (unsigned long)arg64);
-			if(err < 0)
-				{
-					GSE_ERR("COMPAT_GSENSOR_IOCTL_GET_CALI is failed!\n");
-				}
-				break;
-		case COMPAT_GSENSOR_IOCTL_GET_DELAY:
-			err = file->f_op->unlocked_ioctl(file, GSENSOR_IOCTL_GET_DELAY, (unsigned long)arg64);
-			if(err < 0)
-				{
-					GSE_ERR("COMPAT_GSENSOR_IOCTL_GET_DELAY is failed!\n");
-				}
-				break;
-
-		case COMPAT_GSENSOR_IOCTL_GET_STATUS:
-			err = file->f_op->unlocked_ioctl(file, GSENSOR_IOCTL_GET_STATUS, (unsigned long)arg64);
-			if(err < 0)
-				{
-					GSE_ERR("COMPAT_GSENSOR_IOCTL_GET_STATUS is failed!\n");
-				}
-				break;
-
-		case COMPAT_GSENSOR_IOCTL_GET_LAYOUT:
-			err = file->f_op->unlocked_ioctl(file, GSENSOR_IOCTL_GET_LAYOUT, (unsigned long)arg64);
-			if(err < 0)
-				{
-					GSE_ERR("COMPAT_GSENSOR_IOCTL_GET_LAYOUT is failed!\n");
-				}
-			break;
-		case COMPAT_GSENSOR_IOCTL_GET_DATA:
-			err = file->f_op->unlocked_ioctl(file, GSENSOR_IOCTL_GET_DATA, (unsigned long)arg64);
-			if(err < 0)
-				{
-					GSE_ERR("COMPAT_GSENSOR_IOCTL_GET_DATA is failed!\n");
-				}
-				break;
-
-		case COMPAT_GSENSOR_IOCTL_SET_DATA:
-			err = file->f_op->unlocked_ioctl(file, GSENSOR_IOCTL_SET_DATA, (unsigned long)arg64);
-			if(err < 0)
-				{
-					GSE_ERR("COMPAT_GSENSOR_IOCTL_SET_DATA is failed!\n");
-				}
-				break;
-		case COMPAT_GSENSOR_IOCTL_GET_TEMP:
-			err = file->f_op->unlocked_ioctl(file, GSENSOR_IOCTL_GET_TEMP, (unsigned long)arg64);
-			if(err < 0)
-				{
-					GSE_ERR("COMPAT_GSENSOR_IOCTL_GET_TEMP is failed!\n");
-				}
-				break;
-
-		case COMPAT_GSENSOR_IOCTL_GET_DANT:
-			err = file->f_op->unlocked_ioctl(file, GSENSOR_IOCTL_GET_DANT, (unsigned long)arg64);
-			if(err < 0)
-				{
-					GSE_ERR("COMPAT_GSENSOR_IOCTL_GET_DANT is failed!\n");
-				}
-				break;
-		case COMPAT_GSENSOR_IOCTL_READ_REG:
-			err = file->f_op->unlocked_ioctl(file, GSENSOR_IOCTL_READ_REG, (unsigned long)arg64);
-			if(err < 0)
-				{
-					GSE_ERR("COMPAT_GSENSOR_IOCTL_READ_REG is failed!\n");
-				}
-				break;
-
-		case COMPAT_GSENSOR_IOCTL_WRITE_REG:
-			err = file->f_op->unlocked_ioctl(file, GSENSOR_IOCTL_WRITE_REG, (unsigned long)arg64);
-			if(err < 0)
-				{
-					GSE_ERR("COMPAT_GSENSOR_IOCTL_WRITE_REG is failed!\n");
-				}
-				break;
-		default:
-			 GSE_ERR("%s not supported = 0x%04x", __FUNCTION__, cmd);
-			 return -ENOIOCTLCMD;
-			 break;
-	}
-	return 0;
-}
-#endif
-static long mxc622x_unlocked_ioctl(struct file *file, unsigned int cmd, unsigned long arg)
-{
-
-	struct i2c_client *client = (struct i2c_client*)file->private_data;
-	struct mxc622x_i2c_data *obj = (struct mxc622x_i2c_data*)i2c_get_clientdata(client);
-	char strbuf[MXC622X_BUFSIZE] ={0};
-	void __user *data;
-	struct SENSOR_DATA sensor_data;
-	int err = 0;
-	int cali[3];
-	int value[3] = {0};
-	int vec[3] = {0};
-	s8 temp = 0 ;
-	int dant[4] = {0};
-	u8 test=0;
-	u8 buf;
-	u8 reg[2];
-	int temp_flag = 0;
-
-	if(_IOC_DIR(cmd) & _IOC_READ)
-	{
-		err = !access_ok(VERIFY_WRITE, (void __user *)arg, _IOC_SIZE(cmd));
-	}
-	else if(_IOC_DIR(cmd) & _IOC_WRITE)
-	{
-		err = !access_ok(VERIFY_READ, (void __user *)arg, _IOC_SIZE(cmd));
-	}
-
-	if(err)
-	{
-		GSE_ERR("access error: %08X, (%2d, %2d)\n", cmd, _IOC_DIR(cmd), _IOC_SIZE(cmd));
-		return -EFAULT;
-	}
-	switch (cmd) {
-		case GSENSOR_IOCTL_INIT:
-			MXC622X_SetPowerMode(client, true);
-			break;
-
-		case GSENSOR_IOCTL_READ_CHIPINFO:
-			data = (void __user *) arg;
-			if(data == NULL)
-			{
-				err = -EINVAL;
-				break;
-			}
-
-			MXC622X_ReadChipInfo(client, strbuf, MXC622X_BUFSIZE);
-			if(copy_to_user(data, strbuf, strlen(strbuf)+1))
-			{
-				err = -EFAULT;
-				break;
-			}
-			break;
-
-		case GSENSOR_IOCTL_READ_SENSORDATA:
-			data = (void __user *) arg;
-			if(data == NULL)
-			{
-				err = -EINVAL;
-				break;
-			}
-			if(!sensor_power)
-			{
-				MXC622X_SetPowerMode(client,true);
-			}
-			MXC622X_ReadSensorDataFactory(client, strbuf, MXC622X_BUFSIZE);
-			if(copy_to_user(data, strbuf, strlen(strbuf)+1))
-			{
-				err = -EFAULT;
-				break;
-			}
-			break;
-		case GSENSOR_IOCTL_READ_GAIN:
-			data = (void __user *) arg;
-			if(data == NULL)
-			{
-				err = -EINVAL;
-				break;
-			}
-
-			if(copy_to_user(data, &gsensor_gain, sizeof(struct GSENSOR_VECTOR3D)))
-			{
-				err = -EFAULT;
-				break;
-			}
-			break;
-		case GSENSOR_IOCTL_READ_RAW_DATA:
-			data = (void __user *) arg;
-			if(data == NULL)
-			{
-				err = -EINVAL;
-				break;
-			}
-			MXC622X_ReadRawData(client, strbuf);
-			if(copy_to_user(data, strbuf, strlen(strbuf)+1))
-			{
-				err = -EFAULT;
-				break;
-			}
-			break;
-		case GSENSOR_IOCTL_SET_CALI:
-			data = (void __user*)arg;
-			if(data == NULL)
-			{
-				err = -EINVAL;
-				break;
-			}
-			if(copy_from_user(&sensor_data, data, sizeof(sensor_data)))
-			{
-				err = -EFAULT;
-				break;
-			}
-			if(atomic_read(&obj->suspend))
-			{
-				GSE_ERR("Perform calibration in suspend state!!\n");
-				err = -EINVAL;
-			}
-			else
-			{
-				cali[MXC622X_AXIS_X] = sensor_data.x * obj->reso->sensitivity / GRAVITY_EARTH_1000;
-				cali[MXC622X_AXIS_Y] = sensor_data.y * obj->reso->sensitivity / GRAVITY_EARTH_1000;
-				cali[MXC622X_AXIS_Z] = sensor_data.z * obj->reso->sensitivity / GRAVITY_EARTH_1000;
-				err = MXC622X_WriteCalibration(client, cali);
-			}
-			break;
-		case GSENSOR_IOCTL_CLR_CALI:
-			err = MXC622X_ResetCalibration(client);
-			break;
-		case GSENSOR_IOCTL_GET_CALI:
-			data = (void __user*)arg;
-			if(data == NULL)
-			{
-				err = -EINVAL;
-				break;
-			}
-			if((err = MXC622X_ReadCalibration(client, cali)))
-			{
-				break;
-			}
-
-			sensor_data.x = cali[MXC622X_AXIS_X] * GRAVITY_EARTH_1000 / obj->reso->sensitivity;
-			sensor_data.y = cali[MXC622X_AXIS_Y] * GRAVITY_EARTH_1000 / obj->reso->sensitivity;
-			sensor_data.z = cali[MXC622X_AXIS_Z] * GRAVITY_EARTH_1000 / obj->reso->sensitivity;
-			if(copy_to_user(data, &sensor_data, sizeof(sensor_data)))
-			{
-				err = -EFAULT;
-				break;
-			}
-			break;
-		case GSENSOR_IOCTL_GET_DELAY:
-			break;
-		case GSENSOR_IOCTL_GET_STATUS:
-			temp_flag = ((sensor_power << 1) | (enable_status & 0x1));
-			data = (void __user *) arg;
-			if(data == NULL)
-			{
-				err = -EINVAL;
-				break;
-			}
-			mutex_lock(&mxc622x_mutex);
-			if(copy_to_user(data, &temp_flag, sizeof(temp_flag)))
-			{
-				err = -EFAULT;
-				temp_flag = 0;
-				mutex_unlock(&mxc622x_mutex);
-				break;
-			}
-			temp_flag = 0;
-			mutex_unlock(&mxc622x_mutex);
-			break;
-		case GSENSOR_IOCTL_GET_LAYOUT:
-			data = (void __user *) arg;
-			if(data == NULL)
-			{
-				err = -EINVAL;
-				break;
-			}
-			if(copy_to_user(data, &(obj->hw.direction), sizeof(obj->hw.direction)))
-			{
-				err = -EFAULT;
-				break;
-			}
-			break;
-		case GSENSOR_IOCTL_GET_DATA:
-			data = (void __user *) arg;
-			if(data == NULL)
-			{
-				err = -EINVAL;
-				break;
-			}
-
-			err = MXC622X_ReadSensorData(client, vec,MXC622X_AXES_NUM);
-
-			if(copy_to_user(data, vec, sizeof(vec)))
-			{
-				err = -EFAULT;
-				break;
-			}
-			break;
-		case GSENSOR_IOCTL_SET_DATA:
-			data = (void __user *) arg;
-			if(data == NULL)
-			{
-				err = -EINVAL;
-				break;
-			}
-
-			if(copy_from_user(value, data, sizeof(value)))
-			{
-				err = -EFAULT;
-				break;
-			}
-
-			MXC622X_SaveData(value);
-			break;
-		case GSENSOR_IOCTL_GET_TEMP:
-			data = (void __user *) arg;
-			if(data == NULL)
-			{
-				err = -EINVAL;
-				break;
-			}
-
-			err = MXC622X_ReadTemp(client, &temp);
-
-			if(copy_to_user(data, &temp, sizeof(temp)))
-			{
-				err = -EFAULT;
-				break;
-			}
-			break;
-		case GSENSOR_IOCTL_GET_DANT:
-			data = (void __user *) arg;
-			if(data == NULL)
-			{
-				err = -EINVAL;
-				break;
-			}
-			err = MXC622X_ReadDant(client, dant);
-			if(copy_to_user(data, dant, sizeof(dant)))
-			{
-				err = -EFAULT;
-				break;
-			}
-			break;
-		case GSENSOR_IOCTL_READ_REG:
-			data = (void __user *) arg;
-			if(data == NULL)
-			{
-				err = -EINVAL;
-				break;
-			}
-			if(copy_from_user(&test, data, sizeof(test)))
-			{
-				err = -EFAULT;
-				break;
-			}
-			if((err = mxc622x_i2c_read_block(client, test, &buf, 1)))
-			{
-				GSE_ERR("error: %d\n", err);
-			}
-			if(copy_to_user(data, &buf, 1))
-			{
-				err = -EFAULT;
-				break;
-			}
-			break;
-
-		case GSENSOR_IOCTL_WRITE_REG:
-			data = (void __user *) arg;
-			if(data == NULL)
-			{
-				err = -EINVAL;
-				break;
-			}
-			if(copy_from_user(reg, data, sizeof(reg)))
-			{
-				err = -EFAULT;
-				break;
-			}
-			err = i2c_master_send(client, reg, 0x2);
-			if(err <= 0)
-			{
-				GSE_ERR("write reg failed!\n");
-				err = -EFAULT;
-				break;
-			}
-			break;
-		default:
-			GSE_ERR("unknown IOCTL: 0x%08x\n", cmd);
-			err = -ENOIOCTLCMD;
-			break;
-	}
-
-	return err;
-}
-
-
-static struct file_operations mxc622x_fops = {
-		 //.owner = THIS_MODULE,
-		 .open = mxc622x_open,
-		 .release = mxc622x_release,
-		 .unlocked_ioctl = mxc622x_unlocked_ioctl,
-#ifdef CONFIG_COMPAT
-		.compat_ioctl = mxc622x_compat_ioctl,
-#endif
-};
-
-//static struct accel_factory_public mxc622x_device = {
-//	.gain = 1,
-//	.sensitivity = 1,
-//	.fops = &mxc622x_fops,
-//};
-
-static struct miscdevice mxc622x_device = {
-		 .minor = MISC_DYNAMIC_MINOR,
-		 .name = "gsensor",
-		 .fops = &mxc622x_fops,
-};
-#ifndef CONFIG_HAS_EARLYSUSPEND
-static int mxc622x_suspend(struct i2c_client *client, pm_message_t msg)
-{
-	 struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
-	 int err = 0;
-
-	 if(msg.event == PM_EVENT_SUSPEND)
-	 {
-		 if(obj == NULL)
-		 {
-			 GSE_ERR("null mxc622x!!\n");
-			 return -EINVAL;
-		 }
-		 mutex_lock(&mxc622x_mutex);
-		 atomic_set(&obj->suspend, 1);
-		 err = MXC622X_SetPowerMode(obj->client, false);
-		 if(err)
-		 {
-			 GSE_ERR("write power control fail!!\n");
-			 mutex_unlock(&mxc622x_mutex);
-			 return -EINVAL;
-		 }
-		 mutex_unlock(&mxc622x_mutex);
-	 }
-	 return err;
-}
-
-static int mxc622x_resume(struct i2c_client *client)
-{
-	struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
-	int err = 0;
-
-
-	if(obj == NULL)
-	{
-		GSE_ERR("null mxc622x!!\n");
-		return -EINVAL;
-	}
-	mutex_lock(&mxc622x_mutex);
-	err = MXC622X_SetPowerMode(client, true);
-	if(err != MXC622X_SUCCESS)
-	{
-		GSE_ERR("Set PowerMode fail!!\n");
-		mutex_unlock(&mxc622x_mutex);
-		return -EINVAL;
-	}
-	atomic_set(&obj->suspend, 0);
-	mutex_unlock(&mxc622x_mutex);
-	return err;
-}
-#else /*CONFIG_HAS_EARLY_SUSPEND is defined*/
-
-static void mxc622x_early_suspend(struct early_suspend *h)
-{
-	 struct mxc622x_i2c_data *obj = container_of(h, struct mxc622x_i2c_data, early_drv);
-	 int err;
-
+ if(msg.event == PM_EVENT_SUSPEND)
+ {	 
 	 if(obj == NULL)
 	 {
-		 GSE_ERR("null mxc622x!!\n");
-		 return;
-	 }
-	mutex_lock(&mxc622x_mutex);
-	atomic_set(&obj->suspend, 1);
-	if(err = MXC622X_SetPowerMode(obj->client, false))
-	{
-		GSE_ERR("write power control fail!!\n");
-		mutex_unlock(&mxc622x_mutex);
-		return;
-	}
-	mutex_unlock(&mxc622x_mutex);
-}
-
-static void mxc622x_late_resume(struct early_suspend *h)
-{
-	 struct mxc622x_i2c_data *obj = container_of(h, struct mxc622x_i2c_data, early_drv);
-	 int err;
-
-	 if(obj == NULL)
-	 {
-		 GSE_ERR("null mxc622x!!\n");
-		 return;
-	 }
-
-	 mutex_lock(&mxc622x_mutex);
-	 err = MXC622X_SetPowerMode(client, true);
-	if(err != MXC622X_SUCCESS)
-	{
-		GSE_ERR("Set PowerMode fail!!\n");
-		 mutex_unlock(&mxc622x_mutex);
+		 GSE_ERR("null pointer!!\n");
 		 return -EINVAL;
 	 }
-	 atomic_set(&obj->suspend, 0);
-	 mutex_unlock(&mxc622x_mutex);
+	 atomic_set(&obj->suspend, 1);
+	 err = MXC622X_SetPowerMode(obj->client, false);
+	 if(err)
+	 {
+		 GSE_ERR("write power control fail!!\n");
+		 return err;
+	 }		 
+ }
+ return err;
+}
+/*----------------------------------------------------------------------------*/
+static int mxc622x_resume(struct i2c_client *client)
+{
+ struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);		  
+ int err;
+ GSE_FUN();
+
+ if(obj == NULL)
+ {
+	 GSE_ERR("null pointer!!\n");
+	 return -EINVAL;
+ }
+
+ err = mxc622x_init_client(client, 0);
+ if(err)
+ {
+	 GSE_ERR("initialize client fail!!\n");
+	 return err;		
+ }
+ atomic_set(&obj->suspend, 0);
+
+ return 0;
 }
 
-#endif /*CONFIG_HAS_EARLYSUSPEND*/
-// if use  this typ of enable , Gsensor should report inputEvent(x, y, z ,stats, div) to HAL
+
+
+	 /*----------------------------------------------------------------------------*/
+//add by major 
 static int mxc622x_open_report_data(int open)
 {
-	//should queuq work to report event if  is_report_input_direct=true
-	return 0;
+	    //should queuq work to report event if  is_report_input_direct=true
+	    return 0;
 }
-
-// if use  this typ of enable , Gsensor only enabled but not report inputEvent to HAL
-
 static int mxc622x_enable_nodata(int en)
 {
-	int res =0;
-	bool power = false;
+    int res =0;
+    int retry = 0;
+    bool power=false;
 
-	if(1==en)
-	{
-		power = true;
-	}
-	if(0==en)
-	{
-		power = false;
-	}
-	res = MXC622X_SetPowerMode(obj_i2c_data->client, power);
-	if(res != MXC622X_SUCCESS)
-	{
-		GSE_ERR("MXC622X_SetPowerMode fail!\n");
-		return -1;
-	}
-	GSE_DEBUG("MXC622X_enable_nodata OK en = %d sensor_power = %d\n", en, sensor_power);
-	enable_status = en;
-	return 0;
+    if(1==en)
+    {
+        power=true;
+    }
+    if(0==en)
+    {
+       power =false;
+    }
+	for(retry = 0; retry < 3; retry++){
+	     res = MXC622X_SetPowerMode(obj_i2c_data->client, power);
+	      if(res == 0)
+	       {
+	           GSE_LOG("mxc622x_SetPowerMode done\n");
+	            break;
+	        }
+	        GSE_LOG("Mxc622x_SetPowerMode fail\n");
+	 }
+ 	if(res != 0)
+	 {
+	      GSE_LOG("mxc622x_SetPowerMode fail!\n");
+	       return -1;
+	 }
+     GSE_LOG("mxc622x_enable_nodata OK!\n");
+	 return 0;
 }
-
-static int gsensor_set_batch(int flag, int64_t samplingPeriodNs, int64_t maxBatchReportLatencyNs)
+static int mxc622x_set_batch(int flag, int64_t samplingPeriodNs, int64_t maxBatchReportLatencyNs)
 {
 	int value = 0;
 
 	value = (int)samplingPeriodNs/1000/1000;
 	/*Fix Me*/
-	GSE_INFO("mxc622x set delay = (%d) OK!\n", value);
+	GSE_LOG("mxc622x set delay = (%d) OK!\n", value);
 
 	return 0;
 
 }
-static int gsensor_flush(void)
+static int mxc622x_flush(void)
 {
 	return acc_flush_report();
 }
 
 static int mxc622x_set_delay(u64 ns)
 {
+	int value =0;
+	value = (int)ns/1000/1000;
+
+	GSE_LOG("mxc622x_set_delay (%d), chip only use 1024HZ \n",value);
 	return 0;
 }
-
 static int mxc622x_get_data(int* x ,int* y,int* z, int* status)
 {
-	int buff[MXC622X_BUFSIZE] = {0};
+	char buff[MXC622X_BUFSIZE];
 	MXC622X_ReadSensorData(obj_i2c_data->client, buff, MXC622X_BUFSIZE);
-	*x = buff[0];
-	*y = buff[1];
-	*z = buff[2];
 
+	sscanf(buff, "%x %x %x", x, y, z);
 	*status = SENSOR_STATUS_ACCURACY_MEDIUM;
-
 	return 0;
 }
-/*----------------------------------------------------------------------------*/
-static int mxc622x_i2c_probe(struct i2c_client *client, const struct i2c_device_id *id)
-{
-	struct i2c_client *new_client = NULL;
-	struct mxc622x_i2c_data *obj = NULL;
 
+static int mxc622x_factory_enable_sensor(bool enabledisable, int64_t sample_periods_ms)
+{
+	int err;
+
+	err = mxc622x_enable_nodata(enabledisable == true ? 1 : 0);
+	if (err) {
+		GSE_ERR("%s enable sensor failed!\n", __func__);
+		return -1;
+	}
+	err = mxc622x_set_batch(0, sample_periods_ms * 1000000, 0);
+	if (err) {
+		GSE_ERR("%s enable set batch failed!\n", __func__);
+		return -1;
+	}
+	return 0;
+}
+static int mxc622x_factory_get_data(int32_t data[3], int *status)
+{
+	return mxc622x_get_data(&data[0], &data[1], &data[2], status);
+
+}
+
+static int mxc622x_factory_get_raw_data(int32_t data[3])
+{
+	char strbuf[MXC622X_BUFSIZE] = { 0 };
+
+	MXC622X_ReadRawData(mxc622x_i2c_client, strbuf);
+	GSE_LOG("support mxc622x_factory_get_raw_data!\n");
+	return 0;
+}
+static int mxc622x_factory_enable_calibration(void)
+{
+	return 0;
+}
+static int mxc622x_factory_clear_cali(void)
+{
 	int err = 0;
 
-	struct acc_control_path ctl={0};
-	struct acc_data_path data={0};
-	GSE_DEBUG_FUNC();
-	GSE_INFO("driver version = %s\n",DRIVER_VERSION);
+	err = MXC622X_ResetCalibration(mxc622x_i2c_client);
+	if (err) {
+		GSE_ERR("MXC622X_ResetCalibration failed!\n");
+		return -1;
+	}
+	return 0;
+}
+
+static int mxc622x_factory_set_cali(int32_t data[3])
+{
+	int err = 0;
+	int cali[3] = { 0 };
+
+	/* obj */
+	obj_i2c_data->cali_sw[MXC622X_AXIS_X] += data[0];
+	obj_i2c_data->cali_sw[MXC622X_AXIS_Y] += data[1];
+	obj_i2c_data->cali_sw[MXC622X_AXIS_Z] += data[2];
+
+	cali[MXC622X_AXIS_X] = data[0] * gsensor_gain.x / GRAVITY_EARTH_1000;
+	cali[MXC622X_AXIS_Y] = data[1] * gsensor_gain.y / GRAVITY_EARTH_1000;
+	cali[MXC622X_AXIS_Z] = data[2] * gsensor_gain.z / GRAVITY_EARTH_1000;
+	err = MXC622X_WriteCalibration(mxc622x_i2c_client, cali);
+	if (err) {
+		GSE_ERR("MXC622X_WriteCalibration failed!\n");
+		return -1;
+	}
+	return 0;
+}
+
+static int mxc622x_factory_get_cali(int32_t data[3])
+{
+	data[0] = obj_i2c_data->cali_sw[MXC622X_AXIS_X];
+	data[1] = obj_i2c_data->cali_sw[MXC622X_AXIS_Y];
+	data[2] = obj_i2c_data->cali_sw[MXC622X_AXIS_Z];
+	return 0;
+}
+static int mxc622x_factory_do_self_test(void)
+{
+	return 0;
+}
+
+static struct accel_factory_fops mxc622x_factory_fops = {
+	.enable_sensor = mxc622x_factory_enable_sensor,
+	.get_data = mxc622x_factory_get_data,
+	.get_raw_data = mxc622x_factory_get_raw_data,
+	.enable_calibration = mxc622x_factory_enable_calibration,
+	.clear_cali = mxc622x_factory_clear_cali,
+	.set_cali = mxc622x_factory_set_cali,
+	.get_cali = mxc622x_factory_get_cali,
+	.do_self_test = mxc622x_factory_do_self_test,
+};
+
+static struct accel_factory_public mxc622x_factory_device = {
+	.gain = 1,
+	.sensitivity = 1,
+	.fops = &mxc622x_factory_fops,
+};
+
+static int mxc622x_i2c_probe(struct i2c_client *client, const struct i2c_device_id *id)
+{
+	struct i2c_client *new_client;
+	struct mxc622x_i2c_data *obj;
+	//struct hwmsen_object sobj;
+	struct acc_control_path ctl={0};//add by major 
+	struct acc_data_path data={0}; //add by major 
+	int err = 0;
+	int retry = 0;
+
+	GSE_FUN();
 
 	if(!(obj = kzalloc(sizeof(*obj), GFP_KERNEL)))
 	{
 		err = -ENOMEM;
 		goto exit;
 	}
-
+ 
+	memset(obj, 0, sizeof(struct mxc622x_i2c_data));
 
 	err = get_accel_dts_func(client->dev.of_node, &obj->hw);
 	if (err < 0) {
 		GSE_ERR("get dts info fail\n");
-		goto exit_kfree;
+		return -1;
 	}
-	atomic_set(&obj->layout, obj->hw.direction);
+
 	err = hwmsen_get_convert(obj->hw.direction, &obj->cvt);
-	if (0 != err) {
+	if(err)
+	{
 		GSE_ERR("invalid direction: %d\n", obj->hw.direction);
-		goto exit_kfree;
+		goto exit;
 	}
 
 	obj_i2c_data = obj;
 	obj->client = client;
+#ifdef FPGA_EARLY_PORTING
+	obj->client->timing = 100;
+#else
+	obj->client->timing = 400;
+#endif
 	new_client = obj->client;
 	i2c_set_clientdata(new_client,obj);
-
+	
 	atomic_set(&obj->trace, 0);
 	atomic_set(&obj->suspend, 0);
-
-
+ 
 #ifdef CONFIG_MXC622X_LOWPASS
-	if(obj->hw->firlen > C_MAX_FIR_LENGTH)
-	{
+	if(obj->hw.firlen > C_MAX_FIR_LENGTH)
 		atomic_set(&obj->firlen, C_MAX_FIR_LENGTH);
-	}
 	else
-	{
-		atomic_set(&obj->firlen, obj->hw->firlen);
-	}
+		atomic_set(&obj->firlen, obj->hw.firlen);
 
 	if(atomic_read(&obj->firlen) > 0)
-	{
 		atomic_set(&obj->fir_en, 1);
-	}
-
+ 
 #endif
-	mxc622x_i2c_client = new_client;
 
-	if((err = mxc622x_init_client(new_client, 1)))
-	{
-		goto exit_init_failed;
+	mxc622x_i2c_client = new_client; 
+	
+	for (retry = 0; retry < 3; retry++) {
+		err = mxc622x_init_client(new_client, 1);
+		if (0 != err) {
+			GSE_ERR("mxc622x_device init cilent fail time: %d\n", retry);
+			continue;
+		}
 	}
+	if (err != 0)
+		goto exit_init_failed;
+ 
+	ctl.is_use_common_factory = false; //add by major 
 
-	ctl.is_use_common_factory = false;
-	/* factory */
-	err = accel_factory_device_register(&mxc622x_device);
+	err = accel_factory_device_register(&mxc622x_factory_device);
 	if (err) {
-		GSE_ERR("mxc622x_device register failed.\n");
+		GSE_ERR("acc_factory register failed.\n");
 		goto exit_misc_device_register_failed;
 	}
 
-	if((err = mxc622x_create_attr(&mxc622x_init_info.platform_diver_addr->driver)))
+	err = mxc622x_create_attr(&(mxc622x_init_info.platform_diver_addr->driver));
+	if(err)
 	{
 		GSE_ERR("create attribute err = %d\n", err);
 		goto exit_create_attr_failed;
 	}
-
-	ctl.open_report_data = mxc622x_open_report_data;
+	//add by major begin 
+	ctl.open_report_data= mxc622x_open_report_data;
 	ctl.enable_nodata = mxc622x_enable_nodata;
 	ctl.set_delay  = mxc622x_set_delay;
-	ctl.batch = gsensor_set_batch;
-	ctl.flush = gsensor_flush;
+	ctl.batch = mxc622x_set_batch;
+	ctl.flush = mxc622x_flush;
 	ctl.is_report_input_direct = false;
+
+#ifdef CONFIG_CUSTOM_KERNEL_SENSORHUB
+	ctl.is_support_batch = obj->hw.is_batch_supported;
+#else
+	ctl.is_support_batch = false;
+#endif
 
 	err = acc_register_control_path(&ctl);
 	if(err)
@@ -1858,96 +1711,90 @@ static int mxc622x_i2c_probe(struct i2c_client *client, const struct i2c_device_
 	err = acc_register_data_path(&data);
 	if(err)
 	{
-		GSE_ERR("register acc data path err\n");
+		GSE_ERR("register acc data path err= %d\n", err);
 		goto exit_kfree;
 	}
-#ifdef CONFIG_HAS_EARLYSUSPEND
-	obj->early_drv.level	 = EARLY_SUSPEND_LEVEL_DISABLE_FB - 1,
-	obj->early_drv.suspend  = mxc622x_early_suspend,
-	obj->early_drv.resume	 = mxc622x_late_resume,
-	register_early_suspend(&obj->early_drv);
-#endif
-	mxc622x_init_flag = 0;
-	GSE_INFO("%s: OK\n", __func__);
+
+	GSE_LOG("%s: OK\n", __func__);    
 	return 0;
 
-exit_create_attr_failed:
-	/* i2c_detach_client(new_client); */
-exit_misc_device_register_failed:
-exit_init_failed:
-exit_kfree:
+	exit_create_attr_failed:
+	exit_misc_device_register_failed:
+	exit_init_failed:
+	//i2c_detach_client(new_client);
+	exit_kfree:
 	kfree(obj);
-exit:
-	GSE_ERR("%s: err = %d\n", __func__, err);
-	mxc622x_init_flag = -1;
-	obj = NULL;
-	new_client = NULL;
-	obj_i2c_data = NULL;
-	mxc622x_i2c_client = NULL;
+	obj =NULL;
+	exit:
+	GSE_ERR("%s: err = %d\n", __func__, err);		  
 	return err;
 }
 
+/*----------------------------------------------------------------------------*/
 static int mxc622x_i2c_remove(struct i2c_client *client)
 {
-	 int err = 0;
-
-	err = mxc622x_delete_attr(&mxc622x_init_info.platform_diver_addr->driver);
-	if (err != 0)
+	int err = 0;	 
+	err = mxc622x_delete_attr(&(mxc622x_init_info.platform_diver_addr->driver));
+	if(err)
 		GSE_ERR("mxc622x_delete_attr fail: %d\n", err);
 
-	 mxc622x_i2c_client = NULL;
-	 i2c_unregister_device(client);
-	 accel_factory_device_deregister(&mxc622x_device);
-	 kfree(i2c_get_clientdata(client));
-	 return 0;
-}
-
-
-static int mxc622x_local_init(void)
-{
-	GSE_DEBUG_FUNC();
-
-	if(i2c_add_driver(&mxc622x_i2c_driver))
-	{
-		 GSE_ERR("add driver error\n");
-		 return -1;
-	}
-	if(-1 == mxc622x_init_flag)
-	{
-		GSE_ERR("mxc622x_local_init failed mxc622x_init_flag=%d\n",mxc622x_init_flag);
-	   	return -1;
-	}
+	mxc622x_i2c_client = NULL;
+	i2c_unregister_device(client);
+	accel_factory_device_deregister(&mxc622x_factory_device);
+	kfree(i2c_get_clientdata(client));
 	return 0;
 }
+	 /*----------------------------------------------------------------------------*/
+
 static int mxc622x_remove(void)
 {
-	 GSE_DEBUG_FUNC();
-	 i2c_del_driver(&mxc622x_i2c_driver);
-	 return 0;
-}
+	struct mxc622x_i2c_data *obj = obj_i2c_data;
 
-static int __init mxc622x_driver_init(void)
-{
+	GSE_FUN();
 
-	GSE_DEBUG_FUNC();
-
-	acc_driver_add(&mxc622x_init_info);
-
-	mutex_init(&mxc622x_mutex);
-
+	i2c_del_driver(&mxc622x_i2c_driver);
 	return 0;
 }
 
-static void __exit mxc622x_driver_exit(void)
+static int  mxc622x_local_init(void)
 {
-	GSE_DEBUG_FUNC();
-	mutex_destroy(&mxc622x_mutex);
+        struct mxc622x_i2c_data *obj = obj_i2c_data;
+
+	GSE_FUN();
+	
+	if(i2c_add_driver(&mxc622x_i2c_driver))
+	{
+		GSE_ERR("add driver error\n");
+		return -1;
+	}
+
+	/*
+	if(MXC622X_INIT_FAIL == s_nInitFlag)
+	{
+		return -1;
+	}
+	*/
+	return 0;
 }
 
-module_init(mxc622x_driver_init);
-module_exit(mxc622x_driver_exit);
+//add end 
+static int __init mxc622x_init(void)
+{
+//	GSE_FUN();
 
-
-MODULE_AUTHOR("Lyon Miao<xlmiao@memsic.com>");
-MODULE_DESCRIPTION("MEMSIC MXC400x Accelerometer Sensor Driver");
+	acc_driver_add(&mxc622x_init_info); //add by major 
+	mutex_init(&g_gsensor_mutex);
+	return 0;	  
+}
+/*----------------------------------------------------------------------------*/
+static void __exit mxc622x_exit(void)
+{
+//	GSE_FUN();
+	mutex_destroy(&g_gsensor_mutex);
+}
+/*----------------------------------------------------------------------------*/
+module_init(mxc622x_init);
+module_exit(mxc622x_exit);
+/*----------------------------------------------------------------------------*/
 MODULE_LICENSE("GPL");
+MODULE_DESCRIPTION("MXC622X I2C driver");
