@@ -39,8 +39,8 @@
 	 
 	 /*----------------------------------------------------------------------------*/
 #define MXC622X_AXIS_X          0
-#define MXC622X_AXIS_Y          1
-#define MXC622X_AXIS_Z          2
+#define MXC622X_AXIS_Y         -1
+#define MXC622X_AXIS_Z         -2
 #define MXC622X_AXES_NUM        2
 #define MXC622X_DATA_LEN        2
 
