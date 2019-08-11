@@ -6,16 +6,16 @@ Original kernel sources by svoboda18 :)
 ## Known information:
 | Subsystem | Driver name | Availability | Working |
 |-----------|-------------|--------------|---------|
-| LCM driver | `hct_hx8394f_dsi_vdo_hd_cmi` | Yes | Yes |
+| LCM driver | `s6d7aa0_dsi_vdo_common` | Yes | Yes |
 | Touch panel | `FT5X0X (i2c 1-0038)` | Yes | Yes |
 | GPU | `Mali-400 MP2` | Yes | Yes |
 | Camera #1 | `hi843b_mipi_raw` | Yes | - |
 | Camera #2 | `gc5005_mipi_raw` | Yes | Yes |
-| Accelerometer | `MXC622X (i2c 2-0015)` | Yes | No |
+| Accelerometer | `MXC622X (i2c 2-0015)` | Yes | Yes (Inverted) |
 | Flash | `DS2016` | - | Yes |
 | Lens | `DW9714AF` | Yes | Yes |
 | RAM | `2 GB LPDDR3_1066` | - | Yes |
-| Sound | `mtsndcard` | Yes | - |
+| Sound | `amp_6323pmic_spk` | Yes | - |
 | Accdet | `mt6580-accdet` | - | Yes |
 | Other | `kd_camera_hw (i2c 0-0036)` | Yes | Yes |
 
@@ -52,6 +52,7 @@ Original kernel sources by svoboda18 :)
 * Clone that repo, by running:
 `git clone https://github.com/ruben1863/android_blackghost_maya kernel`
 * Start the build:
+`sudo chmod -R 777 kernel`
 `cd kernel ; bash Build-BlackGhostKernel`
 * Then type `b` to **build** the kernel
   - Output kernel will be in zip named with date of the build.
