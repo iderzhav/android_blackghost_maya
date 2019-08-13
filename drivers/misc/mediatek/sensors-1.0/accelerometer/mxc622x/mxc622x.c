@@ -39,8 +39,8 @@
 	 
 	 /*----------------------------------------------------------------------------*/
 #define MXC622X_AXIS_X          0
-#define MXC622X_AXIS_Y         -1
-#define MXC622X_AXIS_Z         -2
+#define MXC622X_AXIS_Y          1
+#define MXC622X_AXIS_Z          2
 #define MXC622X_AXES_NUM        2
 #define MXC622X_DATA_LEN        2
 
@@ -393,14 +393,14 @@ static int MXC622X_ReadData(struct i2c_client *client, s16 data[MXC622X_AXES_NUM
 			 data[MXC622X_AXIS_X] = ~data[MXC622X_AXIS_X];
 			 data[MXC622X_AXIS_X] &= 0xff;
 			 data[MXC622X_AXIS_X]+=1;
-			 data[MXC622X_AXIS_X] = -data[MXC622X_AXIS_X];
+			 data[MXC622X_AXIS_X] = data[MXC622X_AXIS_X];
 	 }
 	 if(data[MXC622X_AXIS_Y]&0x80)
 	 {
 			 data[MXC622X_AXIS_Y] = ~data[MXC622X_AXIS_Y];
 			 data[MXC622X_AXIS_Y] &= 0xff;
 			 data[MXC622X_AXIS_Y]+=1;
-			 data[MXC622X_AXIS_Y] = -data[MXC622X_AXIS_Y];
+			 data[MXC622X_AXIS_Y] = data[MXC622X_AXIS_Y];
 	 }
 
 
