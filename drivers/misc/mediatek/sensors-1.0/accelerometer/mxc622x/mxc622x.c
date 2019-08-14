@@ -393,14 +393,14 @@ static int MXC622X_ReadData(struct i2c_client *client, s16 data[MXC622X_AXES_NUM
 			 data[MXC622X_AXIS_X] = ~data[MXC622X_AXIS_X];
 			 data[MXC622X_AXIS_X] &= 0xff;
 			 data[MXC622X_AXIS_X]+=1;
-			 data[MXC622X_AXIS_X] = data[MXC622X_AXIS_X];
+			 data[MXC622X_AXIS_X] = -data[MXC622X_AXIS_X];
 	 }
 	 if(data[MXC622X_AXIS_Y]&0x80)
 	 {
 			 data[MXC622X_AXIS_Y] = ~data[MXC622X_AXIS_Y];
 			 data[MXC622X_AXIS_Y] &= 0xff;
 			 data[MXC622X_AXIS_Y]+=1;
-			 data[MXC622X_AXIS_Y] = data[MXC622X_AXIS_Y];
+			 data[MXC622X_AXIS_Y] = -data[MXC622X_AXIS_Y];
 	 }
 
 
@@ -907,14 +907,14 @@ static int MXC622X_ReadSensorData(struct i2c_client *client, char *buf, int bufs
 	 obj->data[MXC622X_AXIS_Y] = obj->data[MXC622X_AXIS_Y] * GRAVITY_EARTH_1000 / obj->reso->sensitivity;
 	#endif
 	 //printk("raw data x=%d, y=%d, z=%d \n",obj->data[MXC622X_AXIS_X],obj->data[MXC622X_AXIS_Y],obj->data[MXC622X_AXIS_Z]);
-	 obj->data[MXC622X_AXIS_X] += obj->cali_sw[MXC622X_AXIS_X];
+	 obj->data[MXC622X_AXIS_X] += abs(obj->cali_sw[MXC622X_AXIS_X]);
 	 obj->data[MXC622X_AXIS_Y] += obj->cali_sw[MXC622X_AXIS_Y];
 
 	 
 	 //printk("cali_sw x=%d, y=%d, z=%d \n",obj->cali_sw[MXC622X_AXIS_X],obj->cali_sw[MXC622X_AXIS_Y],obj->cali_sw[MXC622X_AXIS_Z]);
 	 
 	 /*remap coordinate*/
-	 acc[obj->cvt.map[MXC622X_AXIS_X]] = obj->cvt.sign[MXC622X_AXIS_X]*obj->data[MXC622X_AXIS_X];
+	 acc[obj->cvt.map[MXC622X_AXIS_X]] = abs(obj->cvt.sign[MXC622X_AXIS_X]*obj->data[MXC622X_AXIS_X]);
 	 acc[obj->cvt.map[MXC622X_AXIS_Y]] = obj->cvt.sign[MXC622X_AXIS_Y]*obj->data[MXC622X_AXIS_Y];
 
 	 //printk("cvt x=%d, y=%d, z=%d \n",obj->cvt.sign[MXC622X_AXIS_X],obj->cvt.sign[MXC622X_AXIS_Y],obj->cvt.sign[MXC622X_AXIS_Z]);
@@ -927,7 +927,7 @@ static int MXC622X_ReadSensorData(struct i2c_client *client, char *buf, int bufs
 	 //Out put the mg
 	 //printk("mg acc=%d, GRAVITY=%d, sensityvity=%d \n",acc[MXC622X_AXIS_X],GRAVITY_EARTH_1000,obj->reso->sensitivity);
 	#if 0
-	 acc[MXC622X_AXIS_X] = acc[MXC622X_AXIS_X] * GRAVITY_EARTH_1000 / obj->reso->sensitivity;
+	 acc[MXC622X_AXIS_X] = abs(acc[MXC622X_AXIS_X] * GRAVITY_EARTH_1000 / obj->reso->sensitivity);
 	 acc[MXC622X_AXIS_Y] = acc[MXC622X_AXIS_Y] * GRAVITY_EARTH_1000 / obj->reso->sensitivity;
 	#endif
 	if(atomic_read(&obj->trace) & ADX_TRC_IOCTL)
@@ -1558,11 +1558,11 @@ static int mxc622x_factory_set_cali(int32_t data[3])
 	int cali[3] = { 0 };
 
 	/* obj */
-	obj_i2c_data->cali_sw[MXC622X_AXIS_X] += data[0];
+	obj_i2c_data->cali_sw[MXC622X_AXIS_X] += abs(data[0]);
 	obj_i2c_data->cali_sw[MXC622X_AXIS_Y] += data[1];
 	obj_i2c_data->cali_sw[MXC622X_AXIS_Z] += data[2];
 
-	cali[MXC622X_AXIS_X] = data[0] * gsensor_gain.x / GRAVITY_EARTH_1000;
+	cali[MXC622X_AXIS_X] = abs(data[0] * gsensor_gain.x / GRAVITY_EARTH_1000);
 	cali[MXC622X_AXIS_Y] = data[1] * gsensor_gain.y / GRAVITY_EARTH_1000;
 	cali[MXC622X_AXIS_Z] = data[2] * gsensor_gain.z / GRAVITY_EARTH_1000;
 	err = MXC622X_WriteCalibration(mxc622x_i2c_client, cali);
@@ -1575,7 +1575,7 @@ static int mxc622x_factory_set_cali(int32_t data[3])
 
 static int mxc622x_factory_get_cali(int32_t data[3])
 {
-	data[0] = obj_i2c_data->cali_sw[MXC622X_AXIS_X];
+	data[0] = abs(obj_i2c_data->cali_sw[MXC622X_AXIS_X]);
 	data[1] = obj_i2c_data->cali_sw[MXC622X_AXIS_Y];
 	data[2] = obj_i2c_data->cali_sw[MXC622X_AXIS_Z];
 	return 0;
