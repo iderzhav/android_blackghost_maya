@@ -350,7 +350,6 @@ int kdCISModulePowerOn(CAMERA_DUAL_CAMERA_SENSOR_ENUM SensorIdx, char *currSenso
 
 			mdelay(5);
 			
-            mtkcam_gpio_set(pinSetIdx, CAMLDO, 1);
 			
 			/* VCAM_IO */
 			if (TRUE != _hwPowerOn(VCAMIO, VOL_1800)) {
