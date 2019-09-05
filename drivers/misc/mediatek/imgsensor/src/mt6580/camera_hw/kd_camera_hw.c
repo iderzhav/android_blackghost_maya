@@ -336,86 +336,75 @@ int kdCISModulePowerOn(CAMERA_DUAL_CAMERA_SENSOR_ENUM SensorIdx, char *currSenso
 
 		PK_DBG("[PowerON]pinSetIdx:%d, currSensorName: %s\n", pinSetIdx, currSensorName);
 
-	// Hi-843B Power On Sequence Start
-	if ((pinSetIdx == 0 )&&(currSensorName && (0 == strcmp(currSensorName,"hi843bmipiraw"))))
-    {
-		//First Power Pin low and Reset Pin Low
-        if (GPIO_CAMERA_INVALID != pinSet[pinSetIdx][IDX_PS_CMPDN]) {
-        	if(mt_set_gpio_mode(pinSet[pinSetIdx][IDX_PS_CMPDN],pinSet[pinSetIdx][IDX_PS_CMPDN+IDX_PS_MODE])){PK_DBG("[CAMERA LENS] set gpio mode failed!! (CMPDN)\n");}
-        	if(mt_set_gpio_dir(pinSet[pinSetIdx][IDX_PS_CMPDN],GPIO_DIR_OUT)){PK_DBG("[CAMERA LENS] set gpio dir failed!! (CMPDN)\n");}
-        	if(mt_set_gpio_out(pinSet[pinSetIdx][IDX_PS_CMPDN],pinSet[pinSetIdx][IDX_PS_CMPDN+IDX_PS_OFF])){PK_DBG("[CAMERA LENS] set gpio failed!! (CMPDN)\n");}
-        }
+		if (currSensorName
+			   && (0 == strcmp(SENSOR_DRVNAME_HI843B_MIPI_RAW,  currSensorName)))
+        {
+			/* First Power Pin low and Reset Pin Low */
+			if (GPIO_CAMERA_INVALID != pinSet[pinSetIdx][IDX_PS_CMPDN])
+				mtkcam_gpio_set(pinSetIdx, CAMPDN,
+						pinSet[pinSetIdx][IDX_PS_CMPDN + IDX_PS_OFF]);
 
-        if (GPIO_CAMERA_INVALID != pinSet[pinSetIdx][IDX_PS_CMRST]) {
-        	if(mt_set_gpio_mode(pinSet[pinSetIdx][IDX_PS_CMRST],pinSet[pinSetIdx][IDX_PS_CMRST+IDX_PS_MODE])){PK_DBG("[CAMERA SENSOR] set gpio mode failed!! (CMRST)\n");}
-        	if(mt_set_gpio_dir(pinSet[pinSetIdx][IDX_PS_CMRST],GPIO_DIR_OUT)){PK_DBG("[CAMERA SENSOR] set gpio dir failed!! (CMRST)\n");}
-        	if(mt_set_gpio_out(pinSet[pinSetIdx][IDX_PS_CMRST],pinSet[pinSetIdx][IDX_PS_CMRST+IDX_PS_OFF])){PK_DBG("[CAMERA SENSOR] set gpio failed!! (CMRST)\n");}
-        }
-            
-		// ISP_MCLK1_EN(FALSE);
-		mdelay(5);
-         
-		//VCAM_IO
-        if(TRUE != hwPowerOn(CAMERA_POWER_VCAM_IO, VOL_1800, mode_name)) {
-        	PK_DBG("[CAMERA SENSOR] Fail to enable digital power (VCAM_IO), power id = %d \n", CAMERA_POWER_VCAM_IO);
-        	goto _kdCISModulePowerOn_exit_;
-        }
-        printk("[PowerON]HI843B-CAMERA_POWER_VCAM_IO\n");
+			if (GPIO_CAMERA_INVALID != pinSet[pinSetIdx][IDX_PS_CMRST])
+				mtkcam_gpio_set(pinSetIdx, CAMRST,
+						pinSet[pinSetIdx][IDX_PS_CMRST + IDX_PS_OFF]);
 
-        mdelay(1);
-
-    	//VCAM_A
-        if(TRUE != hwPowerOn(CAMERA_POWER_VCAM_A, VOL_2800,mode_name)) {
-        	PK_DBG("[CAMERA SENSOR] Fail to enable analog power (VCAM_A), power id = %d\n", CAMERA_POWER_VCAM_A);
-        	goto _kdCISModulePowerOn_exit_;
-        }
-        printk("[PowerON]HI843B-CAMERA_POWER_VCAM_A\n");
-
-        mdelay(1);
-
-		//VCAM_D
-        if(TRUE != hwPowerOn(CAMERA_POWER_VCAM_D, VOL_1200,mode_name)) {
-        	PK_DBG("[CAMERA SENSOR] Fail to enable digital power (VCAM_D), power id = %d \n", CAMERA_POWER_VCAM_D);
-        	goto _kdCISModulePowerOn_exit_;
-        }
-        printk("[PowerON]HI843B-CAMERA_POWER_VCAM_D\n");
-
-        mdelay(5);
-        //ISP_MCLK1_EN(TRUE);
-		//mdelay(5);
-
-        //AF_VCC
-        if(TRUE != hwPowerOn(CAMERA_POWER_VCAM_AF, VOL_2800,mode_name)) {
-        	PK_DBG("[CAMERA SENSOR] Fail to enable analog power (VCAM_AF), power id = %d \n", CAMERA_POWER_VCAM_AF);
-        	goto _kdCISModulePowerOn_exit_;
-        }
-        printk("[PowerON]HI843B-CAMERA_POWER_VCAM_AF\n");
-
-        mdelay(1);
-      
-	  	//PDN/STBY pin
-		if (GPIO_CAMERA_INVALID != pinSet[pinSetIdx][IDX_PS_CMRST]) {
-			PK_DBG("HI843B PDN off to on\n");
-			if(mt_set_gpio_mode(pinSet[pinSetIdx][IDX_PS_CMPDN],pinSet[pinSetIdx][IDX_PS_CMPDN+IDX_PS_MODE])){PK_DBG("[CAMERA LENS] set gpio mode failed!! \n");}
-			if(mt_set_gpio_dir(pinSet[pinSetIdx][IDX_PS_CMPDN],GPIO_DIR_OUT)){PK_DBG("[CAMERA LENS] set gpio dir failed!! \n");}
-			if(mt_set_gpio_out(pinSet[pinSetIdx][IDX_PS_CMPDN],pinSet[pinSetIdx][IDX_PS_CMPDN+IDX_PS_OFF])){PK_DBG("[CAMERA LENS] set gpio failed!! \n");}
-			mdelay(10);
-			if(mt_set_gpio_out(pinSet[pinSetIdx][IDX_PS_CMPDN],pinSet[pinSetIdx][IDX_PS_CMPDN+IDX_PS_ON])){PK_DBG("[CAMERA LENS] set gpio failed!! \n");}
+			mdelay(5);
+			
+            mtkcam_gpio_set(pinSetIdx, CAMLDO, 1);
+			
+			/* VCAM_IO */
+			if (TRUE != _hwPowerOn(VCAMIO, VOL_1800)) {
+				PK_DBG
+				    ("[CAMERA SENSOR]Fail to enable digital power(VCAM_IO),power id = %d\n",
+				     VCAMIO);
+				goto _kdCISModulePowerOn_exit_;
+			}
 			mdelay(1);
-		
-		//RST pin
-			PK_DBG("HI843B RST off toon\n");
-			if(mt_set_gpio_mode(pinSet[pinSetIdx][IDX_PS_CMRST],pinSet[pinSetIdx][IDX_PS_CMRST+IDX_PS_MODE])){PK_DBG("[CAMERA SENSOR] set gpio mode failed!! \n");}
-			if(mt_set_gpio_dir(pinSet[pinSetIdx][IDX_PS_CMRST],GPIO_DIR_OUT)){PK_DBG("[CAMERA SENSOR] set gpio dir failed!! \n");}
-			if(mt_set_gpio_out(pinSet[pinSetIdx][IDX_PS_CMRST],pinSet[pinSetIdx][IDX_PS_CMRST+IDX_PS_OFF])){PK_DBG("[CAMERA SENSOR] set gpio failed!! \n");}
-			mdelay(10);
-			if(mt_set_gpio_out(pinSet[pinSetIdx][IDX_PS_CMRST],pinSet[pinSetIdx][IDX_PS_CMRST+IDX_PS_ON])){PK_DBG("[CAMERA SENSOR] set gpio failed!! \n");}
-			mdelay(1);  
-		}
-		
-        }	// Hi-843B Power On Sequence End
+			/* VCAM_A */
+			if (TRUE != _hwPowerOn(VCAMA, VOL_2800)) {
+				PK_DBG
+				    ("[CAMERA SENSOR] Fail to enable analog power (VCAM_A),power id = %d\n",
+				     VCAMA);
+				goto _kdCISModulePowerOn_exit_;
+			}
 
-		if ((currSensorName && (0 == strcmp(currSensorName, "imx135mipiraw"))) ||
+			mdelay(1);
+
+			if (TRUE != _hwPowerOn(VCAMD, VOL_1200)) {
+				PK_DBG
+				    ("[CAMERA SENSOR] Fail to enable digital power (VCAM_D),power id = %d\n",
+				     VCAMD);
+				goto _kdCISModulePowerOn_exit_;
+			}
+
+			mdelay(5);
+
+			/* AF_VCC */
+			if (TRUE != _hwPowerOn(VCAMAF, VOL_2800)) {
+				PK_DBG
+				    ("[CAMERA SENSOR] Fail to enable analog power (VCAM_AF),power id = %d\n",
+				     VCAMAF);
+				goto _kdCISModulePowerOn_exit_;
+			}
+
+			mdelay(1);
+			
+			/* enable active sensor */
+			if (GPIO_CAMERA_INVALID != pinSet[pinSetIdx][IDX_PS_CMPDN])
+				mtkcam_gpio_set(pinSetIdx, CAMPDN,
+						pinSet[pinSetIdx][IDX_PS_CMPDN + IDX_PS_ON]);
+
+			mdelay(2);
+
+			if (GPIO_CAMERA_INVALID != pinSet[pinSetIdx][IDX_PS_CMRST])
+				mtkcam_gpio_set(pinSetIdx, CAMRST,
+						pinSet[pinSetIdx][IDX_PS_CMRST + IDX_PS_ON]);
+
+			mdelay(20);
+			
+        }
+
+		else if((currSensorName && (0 == strcmp(currSensorName, "imx135mipiraw"))) ||
 		    (currSensorName && (0 == strcmp(currSensorName, "imx220mipiraw")))) {
 			/* First Power Pin low and Reset Pin Low */
 			if (GPIO_CAMERA_INVALID != pinSet[pinSetIdx][IDX_PS_CMPDN])
@@ -609,7 +598,7 @@ int kdCISModulePowerOn(CAMERA_DUAL_CAMERA_SENSOR_ENUM SensorIdx, char *currSenso
 						pinSet[pinSetIdx][IDX_PS_CMRST + IDX_PS_ON]);
 
 			mdelay(20);
-			} else if (currSensorName
+		} else if (currSensorName
 				&& ((0 == strcmp(SENSOR_DRVNAME_GC2355_MIPI_RAW, currSensorName)) || \
 				(0 == strcmp("ov9760mipiraw", currSensorName)) || \
 				(0 == strcmp("hi841mipiraw", currSensorName)) || \
@@ -688,7 +677,7 @@ int kdCISModulePowerOn(CAMERA_DUAL_CAMERA_SENSOR_ENUM SensorIdx, char *currSenso
 
 			mdelay(5);
 
-             }
+            }
 
         else if (currSensorName
 			   && (0 == strcmp(SENSOR_DRVNAME_GC5005_MIPI_RAW,  currSensorName)))
@@ -760,7 +749,7 @@ int kdCISModulePowerOn(CAMERA_DUAL_CAMERA_SENSOR_ENUM SensorIdx, char *currSenso
 						pinSet[pinSetIdx][IDX_PS_CMPDN + IDX_PS_OFF]);
             mdelay(5);
 
-			} else if (currSensorName
+		} else if (currSensorName
 				&& (0 == strcmp(SENSOR_DRVNAME_GC0310_YUV, currSensorName))) {
 			/* First Power Pin low and Reset Pin Low */
 			if (GPIO_CAMERA_INVALID != pinSet[pinSetIdx][IDX_PS_CMPDN])
@@ -898,6 +887,53 @@ int kdCISModulePowerOn(CAMERA_DUAL_CAMERA_SENSOR_ENUM SensorIdx, char *currSenso
 			ISP_MCLK1_EN(0);
 		else if (pinSetIdx == 1)
 			ISP_MCLK2_EN(0);
+
+            } else if (currSensorName 
+                && (0 == strcmp(SENSOR_DRVNAME_HI843B_MIPI_RAW,  currSensorName)))
+        {
+			/* Set Power Pin low and Reset Pin Low */
+			if (GPIO_CAMERA_INVALID != pinSet[pinSetIdx][IDX_PS_CMPDN])
+				mtkcam_gpio_set(pinSetIdx, CAMPDN,
+						pinSet[pinSetIdx][IDX_PS_CMPDN + IDX_PS_OFF]);
+
+			if (GPIO_CAMERA_INVALID != pinSet[pinSetIdx][IDX_PS_CMRST])
+				mtkcam_gpio_set(pinSetIdx, CAMRST,
+						pinSet[pinSetIdx][IDX_PS_CMRST + IDX_PS_ON]);
+
+			if (TRUE != _hwPowerDown(VCAMD)) {
+				PK_DBG
+				    ("[CAMERA SENSOR] Fail to OFF core power (VCAM_D),power id = %d\n",
+				     VCAMD);
+				goto _kdCISModulePowerOn_exit_;
+			}
+
+			/* VCAM_A */
+			if (TRUE != _hwPowerDown(VCAMA)) {
+				PK_DBG
+				    ("[CAMERA SENSOR] Fail to OFF analog power (VCAM_A),power id= (%d)\n",
+				     VCAMA);
+				/* return -EIO; */
+				goto _kdCISModulePowerOn_exit_;
+			}
+
+			/* VCAM_IO */
+			if (TRUE != _hwPowerDown(VCAMIO)) {
+				PK_DBG
+				    ("[CAMERA SENSOR] Fail to OFF digital power (VCAM_IO),power id = %d\n",
+				     VCAMIO);
+				/* return -EIO; */
+				goto _kdCISModulePowerOn_exit_;
+			}
+
+			/* AF_VCC */
+			if (TRUE != _hwPowerDown(VCAMAF)) {
+				PK_DBG
+				    ("[CAMERA SENSOR] Fail to OFF AF power (VCAM_AF), power id = %d\n",
+				     VCAMAF);
+				/* return -EIO; */
+				goto _kdCISModulePowerOn_exit_;
+			}
+		}
 
 		if ((currSensorName && (0 == strcmp(currSensorName, "imx135mipiraw"))) ||
 		    (currSensorName && (0 == strcmp(currSensorName, "imx220mipiraw")))) {
@@ -1679,64 +1715,8 @@ int kdCISModulePowerOn(CAMERA_DUAL_CAMERA_SENSOR_ENUM SensorIdx, char *currSenso
 					PK_DBG("[CAMERA LENS] set gpio failed!! (CMPDN)\n");
 				}
 			}
-
-				// Hi-843B Power On Sequence start 
-				if (currSensorName && (0 == strcmp(currSensorName,"hi843bmipiraw")))
-				{
-					PK_DBG("kdCISModulePower--off get in---SENSOR_DRVNAME_HI841_MIPI_RAW \n");
-
-				//reset pull down
-				if (GPIO_CAMERA_INVALID != pinSet[pinSetIdx][IDX_PS_CMRST]) {
-					PK_DBG("RST ON to OFF\n");
-					if(mt_set_gpio_mode(pinSet[pinSetIdx][IDX_PS_CMRST],pinSet[pinSetIdx][IDX_PS_CMRST+IDX_PS_MODE])){PK_DBG("[CAMERA SENSOR] set gpio mode failed!! \n");}
-					if(mt_set_gpio_dir(pinSet[pinSetIdx][IDX_PS_CMRST],GPIO_DIR_OUT)){PK_DBG("[CAMERA SENSOR] set gpio dir failed!! \n");}
-					if(mt_set_gpio_out(pinSet[pinSetIdx][IDX_PS_CMRST],pinSet[pinSetIdx][IDX_PS_CMRST+IDX_PS_OFF])){PK_DBG("[CAMERA SENSOR] set gpio failed!! \n");} //low == reset sensor
-				}
-					mdelay(5);
-
-				//PDN pull down
-				PK_DBG("PDN on to off\n");
-				if (GPIO_CAMERA_INVALID != pinSet[pinSetIdx][IDX_PS_CMRST]) {
-					if(mt_set_gpio_mode(pinSet[pinSetIdx][IDX_PS_CMPDN],pinSet[pinSetIdx][IDX_PS_CMPDN+IDX_PS_MODE])){PK_DBG("[CAMERA LENS] set gpio mode failed!! \n");}
-					if(mt_set_gpio_dir(pinSet[pinSetIdx][IDX_PS_CMPDN],GPIO_DIR_OUT)){PK_DBG("[CAMERA LENS] set gpio dir failed!! \n");}
-					if(mt_set_gpio_out(pinSet[pinSetIdx][IDX_PS_CMPDN],pinSet[pinSetIdx][IDX_PS_CMPDN+IDX_PS_OFF])){PK_DBG("[CAMERA LENS] set gpio failed!! \n");} //high == power down lens module
-				}
-
-				mdelay(1);
-
-				ISP_MCLK1_EN(FALSE);
-				
-				//AF_VCC
-				if(TRUE != hwPowerDown(CAMERA_POWER_VCAM_AF,mode_name))
-				{
-					PK_DBG("[CAMERA SENSOR] Fail to OFF AF power (VCAM_AF), power id = %d \n", CAMERA_POWER_VCAM_AF);
-					//return -EIO;
-					goto _kdCISModulePowerOn_exit_;
-				} 
-				
-				//VCAM_D power down 
-				if(TRUE != hwPowerDown(CAMERA_POWER_VCAM_D, mode_name)) {
-					PK_DBG("[CAMERA SENSOR] Fail to OFF digital power (VCAM_D), power id = %d \n", CAMERA_POWER_VCAM_D);
-					//return -EIO;
-					goto _kdCISModulePowerOn_exit_;
-				}
-				
-				//VCAM_A power down 
-				if(TRUE != hwPowerDown(CAMERA_POWER_VCAM_A,mode_name)) {
-					PK_DBG("[CAMERA SENSOR] Fail to OFF core power (VCAM_A), power id = %d \n",CAMERA_POWER_VCAM_A);
-					goto _kdCISModulePowerOn_exit_;
-				}  
-				 
-				//VCAM_IO power down 
-				if(TRUE != hwPowerDown(CAMERA_POWER_VCAM_IO,mode_name)) {
-					PK_DBG("[CAMERA SENSOR] Fail to OFF analog power (VCAM_IO), power id= (%d) \n", CAMERA_POWER_VCAM_IO);
-					//return -EIO;
-					goto _kdCISModulePowerOn_exit_;
-				}  	  
-
-				} // Hi-843B Power On Sequence end 
-
 			mdelay(5);
+
 		} else if (currSensorName
 			   && (0 == strcmp(SENSOR_DRVNAME_GC0310_YUV, currSensorName))) {
 			/* First Power Pin low and Reset Pin Low */
