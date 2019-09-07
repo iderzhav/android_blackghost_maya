@@ -465,7 +465,7 @@ int kdCISModulePowerOn(CAMERA_DUAL_CAMERA_SENSOR_ENUM SensorIdx, char *currSenso
 				(0 == strcmp(SENSOR_DRVNAME_OV5648_MIPI_RAW, currSensorName)) ||
 				(0 == strcmp(SENSOR_DRVNAME_OV5693_MIPI_RAW, currSensorName))
 				))
-			{
+		{
 			/* First Power Pin low and Reset Pin Low */
 			if (GPIO_CAMERA_INVALID != pinSet[pinSetIdx][IDX_PS_CMPDN])
 				mtkcam_gpio_set(pinSetIdx, CAMPDN,
@@ -877,18 +877,18 @@ int kdCISModulePowerOn(CAMERA_DUAL_CAMERA_SENSOR_ENUM SensorIdx, char *currSenso
 			if (GPIO_CAMERA_INVALID != pinSet[pinSetIdx][IDX_PS_CMRST])
 				mtkcam_gpio_set(pinSetIdx, CAMRST,
 						pinSet[pinSetIdx][IDX_PS_CMRST + IDX_PS_ON]);
-				}
-		} else {		/* power OFF */
+		}
+	} else {		/* power OFF */
 
-				PK_DBG("[PowerOFF]pinSetIdx:%d\n", pinSetIdx);
-				if (pinSetIdx == 0)
-					ISP_MCLK1_EN(0);
-				else if (pinSetIdx == 1)
-					ISP_MCLK2_EN(0);
+		PK_DBG("[PowerOFF]pinSetIdx:%d\n", pinSetIdx);
+		if (pinSetIdx == 0)
+			ISP_MCLK1_EN(0);
+		else if (pinSetIdx == 1)
+			ISP_MCLK2_EN(0);
 
             if (currSensorName 
                 && (0 == strcmp(SENSOR_DRVNAME_HI843B_MIPI_RAW,  currSensorName)))
-         {
+		{
 			/* Set Power Pin low and Reset Pin Low */
 			if (GPIO_CAMERA_INVALID != pinSet[pinSetIdx][IDX_PS_CMPDN])
 				mtkcam_gpio_set(pinSetIdx, CAMPDN,
@@ -931,7 +931,7 @@ int kdCISModulePowerOn(CAMERA_DUAL_CAMERA_SENSOR_ENUM SensorIdx, char *currSenso
 				/* return -EIO; */
 				goto _kdCISModulePowerOn_exit_;
 			}
-		 }
+		
 
 		} else if ((currSensorName && (0 == strcmp(currSensorName, "imx135mipiraw"))) ||
 		    (currSensorName && (0 == strcmp(currSensorName, "imx220mipiraw")))) {
