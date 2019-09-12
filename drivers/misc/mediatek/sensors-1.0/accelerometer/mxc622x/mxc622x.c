@@ -166,8 +166,7 @@ static struct data_resolution mxc622x_offset_resolution = {{15, 6}, 64};
 	 
 
 static struct mutex g_gsensor_mutex;
-//#define BMA222_I2C_GPIO_MODE
-//#define BMA222_I2C_GPIO_MODE_DEBUG
+
 
 #define MXC622X_ABS(a) (((a) < 0) ? -(a) : (a))
 
@@ -209,7 +208,6 @@ static int mxc622x_i2c_read_block(struct i2c_client *client, u8 addr, u8 *data, 
 	int err;
 	struct i2c_msg msgs[2]={{0},{0}};
 	
-//	mutex_lock(&MC3XXX_i2c_mutex);
 
 	msgs[0].addr = client->addr;
 	msgs[0].flags = 0;
@@ -224,13 +222,11 @@ static int mxc622x_i2c_read_block(struct i2c_client *client, u8 addr, u8 *data, 
 
 	if (!client)
 	{
-//		mutex_unlock(&MC3XXX_i2c_mutex);
 		return -EINVAL;
 	}
 	else if (len > C_I2C_FIFO_SIZE)
 	{
 		GSE_ERR(" length %d exceeds %d\n", len, C_I2C_FIFO_SIZE);
-//		mutex_unlock(&MC3XXX_i2c_mutex);
 		return -EINVAL;
 	}
 	err = i2c_transfer(client->adapter, msgs, sizeof(msgs)/sizeof(msgs[0]));
@@ -243,25 +239,21 @@ static int mxc622x_i2c_read_block(struct i2c_client *client, u8 addr, u8 *data, 
 	{
 		err = 0;
 	}
-//	mutex_unlock(&MC3XXX_i2c_mutex);
 	return err;
 }
 static int mxc622x_i2c_write_block(struct i2c_client *client, u8 addr, u8 *data, u8 len)
 {   /*because address also occupies one byte, the maximum length for write is 7 bytes*/
 	int err, idx, num;
 	char buf[C_I2C_FIFO_SIZE];
-	err =0;
-//	mutex_lock(&MC3XXX_i2c_mutex);
+	err = 0;
 	
 	if (!client)
 	{
-//		mutex_unlock(&MC3XXX_i2c_mutex);
 		return -EINVAL;
 	}
 	else if (len >= C_I2C_FIFO_SIZE)
 	{
 		GSE_ERR(" length %d exceeds %d\n", len, C_I2C_FIFO_SIZE);
-//		mutex_unlock(&MC3XXX_i2c_mutex);
 		return -EINVAL;
 	}
 
@@ -275,14 +267,12 @@ static int mxc622x_i2c_write_block(struct i2c_client *client, u8 addr, u8 *data,
 	if (err < 0)
 	{
 		GSE_ERR("send command error!!\n");
-//		mutex_unlock(&MC3XXX_i2c_mutex);
 		return -EFAULT;
 	}
 	else
 	{
 		err = 0;
 	}
-//	mutex_unlock(&MC3XXX_i2c_mutex);
 	return err;
 
 }	//add end
@@ -465,18 +455,19 @@ static int MXC622X_ReadData(struct i2c_client *client, s16 data[MXC622X_AXES_NUM
 /*----------------------------------------------------------------------------*/
 static int MXC622X_ReadOffset(struct i2c_client *client, s8 ofs[MXC622X_AXES_NUM])
 {	  
- int err=0;
-#ifdef SW_CALIBRATION
- ofs[0]=ofs[1]=ofs[2]=0x0;
-#else
-/*
- if(err = hwmsen_read_block(client, MXC622X_REG_OFSX, ofs, MXC622X_AXES_NUM))
- {
-	 GSE_ERR("error: %d\n", err);
- }
-*/
-#endif
- //printk("offesx=%x, y=%x, z=%x",ofs[0],ofs[1],ofs[2]);
+	int err;
+	err = 0;
+	#ifdef SW_CALIBRATION
+	 ofs[0]=ofs[1]=ofs[2]=0x0;
+	#else
+	/*
+	 if(err = hwmsen_read_block(client, MXC622X_REG_OFSX, ofs, MXC622X_AXES_NUM))
+	 {
+		 GSE_ERR("error: %d\n", err);
+	 }
+	*/
+	#endif
+	 //printk("offesx=%x, y=%x, z=%x",ofs[0],ofs[1],ofs[2]);
  
  return err;	
 }
@@ -484,20 +475,9 @@ static int MXC622X_ReadOffset(struct i2c_client *client, s8 ofs[MXC622X_AXES_NUM
 static int MXC622X_ResetCalibration(struct i2c_client *client)
 {
  struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
-// u8 ofs[4]={0,0,0,0};
- int err=0;
+	int err;
+	err = 0;
  
-#ifdef SW_CALIBRATION
-	 
-#else
-/*
-	 if(err = hwmsen_write_block(client, MXC622X_REG_OFSX, ofs, 4))
-	 {
-		 GSE_ERR("error: %d\n", err);
-	 }
-*/
-#endif
-
  memset(obj->cali_sw, 0x00, sizeof(obj->cali_sw));
  memset(obj->offset, 0x00, sizeof(obj->offset));
  return err;	
@@ -506,7 +486,7 @@ static int MXC622X_ResetCalibration(struct i2c_client *client)
 static int MXC622X_ReadCalibration(struct i2c_client *client, int dat[MXC622X_AXES_NUM])
 {
  struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
-// int err=0;
+ int err = 0;
  int mul;
 
 #ifdef SW_CALIBRATION
@@ -525,15 +505,16 @@ static int MXC622X_ReadCalibration(struct i2c_client *client, int dat[MXC622X_AX
  dat[obj->cvt.map[MXC622X_AXIS_Y]] = obj->cvt.sign[MXC622X_AXIS_Y]*(obj->offset[MXC622X_AXIS_Y]*mul*GRAVITY_EARTH_1000/(obj->reso->sensitivity) + obj->cali_sw[MXC622X_AXIS_Y]);
 					
 									
- return 0;
+ return err;
 }
 /*----------------------------------------------------------------------------*/
 static int MXC622X_ReadCalibrationEx(struct i2c_client *client, int act[MXC622X_AXES_NUM], int raw[MXC622X_AXES_NUM])
 {	
  /*raw: the raw calibration data; act: the actual calibration data*/
  struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
-// int err;
+ int err;
  int mul;
+ err = 0;
 
 
 
@@ -564,8 +545,14 @@ static int MXC622X_WriteCalibration(struct i2c_client *client, int dat[MXC622X_A
  struct mxc622x_i2c_data *obj = i2c_get_clientdata(client);
  int err;
  int cali[MXC622X_AXES_NUM], raw[MXC622X_AXES_NUM];
-// int lsb = mxc622x_offset_resolution.sensitivity;
-// int divisor = obj->reso->sensitivity/lsb;
+
+#ifdef SW_CALIBRATION
+#else
+	int lsb;
+	lsb = mxc622x_offset_resolution.sensitivity;
+	int divisor = obj->reso->sensitivity/lsb;
+#endif
+
  err = MXC622X_ReadCalibrationEx(client, cali, raw);
  if(err)	 /*offset will be updated in obj->offset*/
  { 
