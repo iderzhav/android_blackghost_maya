@@ -82,7 +82,6 @@
 
 #include "mt_soc_pcm_common.h"
 #include "AudDrv_Common_func.h"
-#include "AudDrv_Gpio.h"
 #include "mt_soc_codec_63xx.h"
 
 /* AW8736 PA output power mode control */
