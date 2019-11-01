@@ -928,37 +928,35 @@ int kdCISModulePowerOn(CAMERA_DUAL_CAMERA_SENSOR_ENUM SensorIdx, char *currSenso
 			}
 
 
-			if (TRUE != _hwPowerOn(VCAMD)) {
+			if (TRUE != _hwPowerOn(CAMERA_POWER_VCAM_AD, VOL_1800, &regVCAMAD)) {
 				PK_DBG
 				    ("[CAMERA SENSOR] Fail to OFF core power (VCAM_D), power id = %d\n",
 				     VCAMD);
 				goto _kdCISModulePowerOn_exit_;
 			}
 			/* VCAM_A */
-			if (TRUE != _hwPowerOn(VCAMA)) {
+			if (TRUE != _hwPowerOn(CAMERA_POWER_VCAM_A, VOL_2800, &regVCAMA)) {
 				PK_DBG
 				    ("[CAMERA SENSOR] Fail to OFF analog power (VCAM_A), power id= (%d)\n",
 				     VCAMA);
 				goto _kdCISModulePowerOn_exit_;
 			}
 			/* VCAM_IO */
-			if (TRUE != _hwPowerOn(VCAMIO)) {
+			if (TRUE != _hwPowerOn(CAMERA_POWER_VCAM_IO, VOL_1200, &regVCAMIO)) {
 				PK_DBG
 				    ("[CAMERA SENSOR] Fail to OFF digital power (VCAM_IO), power id = %d\n",
 				     VCAMIO);
 				goto _kdCISModulePowerOn_exit_;
 			}
 			/* AF_VCC */
-			if (TRUE != _hwPowerOn(VCAMAF)) {
+			if (TRUE != _hwPowerOn(CAMERA_POWER_VCAM_AF, VOL_2800, &regVCAMAF)) {
 				PK_DBG
 				    ("[CAMERA SENSOR] Fail to OFF AF power (VCAM_AF), power id = %d\n",
 				     VCAMAF);
 				goto _kdCISModulePowerOn_exit_;
 			}
-
 		}
 		
-
 		else if ((currSensorName && (0 == strcmp(currSensorName, "imx135mipiraw"))) ||
 		    (currSensorName && (0 == strcmp(currSensorName, "imx220mipiraw")))) {
 			/* Set Power Pin low and Reset Pin Low */
