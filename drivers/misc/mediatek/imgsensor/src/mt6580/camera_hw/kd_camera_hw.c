@@ -909,7 +909,7 @@ int kdCISModulePowerOn(CAMERA_DUAL_CAMERA_SENSOR_ENUM SensorIdx, char *currSenso
 			ISP_MCLK2_EN(0);
 
 
-		}
+
 
         if (currSensorName
 			   && (0 == strcmp(SENSOR_DRVNAME_HI843B_MIPI_RAW, currSensorName))) {
