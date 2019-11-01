@@ -928,28 +928,28 @@ int kdCISModulePowerOn(CAMERA_DUAL_CAMERA_SENSOR_ENUM SensorIdx, char *currSenso
 			}
 
 
-			if (TRUE != _hwPowerOn(CAMERA_POWER_VCAM_AD, VOL_1800, &regVCAMAD)) {
+			if (TRUE != _hwPowerDown(VCAMAD)) {
 				PK_DBG
 				    ("[CAMERA SENSOR] Fail to OFF core power (VCAM_D), power id = %d\n",
 				     VCAMD);
 				goto _kdCISModulePowerOn_exit_;
 			}
 			/* VCAM_A */
-			if (TRUE != _hwPowerOn(CAMERA_POWER_VCAM_A, VOL_2800, &regVCAMA)) {
+			if (TRUE != _hwPowerDown(VCAMA)) {
 				PK_DBG
 				    ("[CAMERA SENSOR] Fail to OFF analog power (VCAM_A), power id= (%d)\n",
 				     VCAMA);
 				goto _kdCISModulePowerOn_exit_;
 			}
 			/* VCAM_IO */
-			if (TRUE != _hwPowerOn(CAMERA_POWER_VCAM_IO, VOL_1200, &regVCAMIO)) {
+			if (TRUE != _hwPowerDown(VCAMIO)) {
 				PK_DBG
 				    ("[CAMERA SENSOR] Fail to OFF digital power (VCAM_IO), power id = %d\n",
 				     VCAMIO);
 				goto _kdCISModulePowerOn_exit_;
 			}
 			/* AF_VCC */
-			if (TRUE != _hwPowerOn(CAMERA_POWER_VCAM_AF, VOL_2800, &regVCAMAF)) {
+			if (TRUE != _hwPowerDown(VCAMAF)) {
 				PK_DBG
 				    ("[CAMERA SENSOR] Fail to OFF AF power (VCAM_AF), power id = %d\n",
 				     VCAMAF);
